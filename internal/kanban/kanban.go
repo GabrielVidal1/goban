@@ -1,6 +1,7 @@
 package kanban
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -23,6 +24,92 @@ type Ticket struct {
 	Column   string   `json:"column"`
 	Project  string   `json:"project"`
 	Path     string   `json:"path"`
+}
+
+type ProjectConfig struct {
+	ColumnsOrder []string `json:"columnsOrder"`
+}
+
+const configFileName = "config.json"
+
+// LoadProjectConfig reads the project's config.json. Returns zero-value struct if file is missing or invalid.
+func LoadProjectConfig(kanbanDir, project string) (ProjectConfig, error) {
+	if kanbanDir == "" {
+		kanbanDir = defaultKanbanDir
+	}
+	cfgPath := filepath.Join(kanbanDir, project, configFileName)
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ProjectConfig{}, nil
+		}
+		return ProjectConfig{}, err
+	}
+	var cfg ProjectConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		// Invalid JSON — treat as empty config
+		return ProjectConfig{}, nil
+	}
+	return cfg, nil
+}
+
+// SaveProjectConfig writes the project's config.json atomically. Creates parent dir if needed.
+func SaveProjectConfig(kanbanDir, project string, cfg ProjectConfig) error {
+	if kanbanDir == "" {
+		kanbanDir = defaultKanbanDir
+	}
+	projDir := filepath.Join(kanbanDir, project)
+	cfgPath := filepath.Join(projDir, configFileName)
+	if err := os.MkdirAll(projDir, 0755); err != nil {
+		return fmt.Errorf("failed to create project directory: %w", err)
+	}
+
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %w", err)
+	}
+
+	tmpPath := cfgPath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write temp config: %w", err)
+	}
+	if err := os.Rename(tmpPath, cfgPath); err != nil {
+		os.Remove(tmpPath) // clean up
+		return fmt.Errorf("failed to rename config: %w", err)
+	}
+	return nil
+}
+
+// ApplyColumnOrder returns columns sorted by the given order first (in that order),
+// with any unlisted columns appended alphabetically. Entries in order not matching
+// actual directories are silently skipped.
+func ApplyColumnOrder(columns []string, order []string) []string {
+	if len(order) == 0 {
+		sort.Strings(columns)
+		return columns
+	}
+
+	actual := make(map[string]bool)
+	for _, c := range columns {
+		actual[c] = true
+	}
+
+	var ordered []string
+	seen := make(map[string]bool)
+	for _, o := range order {
+		if actual[o] && !seen[o] {
+			ordered = append(ordered, o)
+			seen[o] = true
+		}
+	}
+
+	for _, c := range columns {
+		if !seen[c] {
+			ordered = append(ordered, c)
+		}
+	}
+
+	return ordered
 }
 
 type Project struct {
@@ -480,6 +567,8 @@ func GetProjectInfo(kanbanDir, projectName string) (*Project, error) {
 	if err != nil {
 		return nil, err
 	}
+	cfg, _ := LoadProjectConfig(kanbanDir, projectName)
+	columns = ApplyColumnOrder(columns, cfg.ColumnsOrder)
 	tickets, _ := ListTickets(kanbanDir, projectName)
 	totalTickets := len(tickets)
 	return &Project{Name: projectName, Columns: columns, TicketCount: totalTickets}, nil
@@ -503,6 +592,8 @@ func GetBoardData(kanbanDir, projectName string) (*BoardData, error) {
 	if err != nil {
 		return nil, err
 	}
+	cfg, _ := LoadProjectConfig(kanbanDir, projectName)
+	columns = ApplyColumnOrder(columns, cfg.ColumnsOrder)
 	board := &BoardData{Project: projectName, Columns: make([]ColumnWithTickets, 0, len(columns))}
 	for _, col := range columns {
 		tickets, _ := ListTicketsFiltered(kanbanDir, projectName, col, "", "", "")

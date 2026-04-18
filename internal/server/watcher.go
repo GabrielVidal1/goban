@@ -4,7 +4,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/fsnotify/fsnotify"
 )
@@ -19,8 +18,7 @@ func StartFileWatcher(kanbanDir string) {
 
 	go func() {
 		for event := range watcher.Events {
-			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove) != 0 &&
-				strings.HasSuffix(event.Name, ".md") {
+			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove) != 0 {
 				log.Printf("File changed: %s", event.Name)
 				sseClientsMu.Lock()
 				alive := sseClients[:0]

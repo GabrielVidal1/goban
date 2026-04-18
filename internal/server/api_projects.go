@@ -1,7 +1,9 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
+	"strings"
 
 	"kanban-ui/internal/kanban"
 )
@@ -88,5 +90,40 @@ func HandleAPIGetTicket(kanbanDir string) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, sanitizeTicket(ticket))
+	}
+}
+
+func HandleAPIGetProjectConfig(kanbanDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		project := r.PathValue("project")
+		cfg, err := kanban.LoadProjectConfig(kanbanDir, project)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, cfg)
+	}
+}
+
+func HandleAPIUpdateProjectConfig(kanbanDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		project := r.PathValue("project")
+		var cfg kanban.ProjectConfig
+		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON body")
+			return
+		}
+		// Validate: entries must be non-empty strings
+		for _, col := range cfg.ColumnsOrder {
+			if strings.TrimSpace(col) == "" {
+				writeError(w, http.StatusBadRequest, "column order entries must be non-empty strings")
+				return
+			}
+		}
+		if err := kanban.SaveProjectConfig(kanbanDir, project, cfg); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
