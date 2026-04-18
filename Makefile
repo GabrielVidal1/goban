@@ -1,10 +1,13 @@
 BINARY  := kanban-ui
 UI_DIR  := ui
 
-.PHONY: build build-ui run run-local dev dev-go dev-ui clean format
+.PHONY: build build-ui run run-local dev dev-go dev-ui clean format tools
 
 format:
 	gofmt -w .
+
+tools:
+	go get -tool github.com/air-verse/air@latest
 
 build: build-ui
 	go mod tidy
@@ -24,11 +27,11 @@ dev:
 	@$(MAKE) -j2 dev-go dev-ui
 
 dev-go:
-	go run .
+	go tool air
 
 dev-ui:
 	cd $(UI_DIR) && npm run dev
 
 clean:
 	rm -f $(BINARY)
-	rm -rf $(UI_DIR)/dist
+	rm -rf $(UI_DIR)/dist tmp
