@@ -13,7 +13,8 @@ description: >
 
 # Kanban Skill
 
-Manages a file-based kanban board at `./kanban/` with multiple project support.
+Manages a file-based kanban board at `./kanban/` with multiple project support,
+driven by the `./kanban-ui` binary's CLI mode.
 
 ## Board Structure
 
@@ -21,29 +22,26 @@ Manages a file-based kanban board at `./kanban/` with multiple project support.
 kanban/
   projectA/              ← project (subdirectory of kanban/)
     Backlog/             ← column (subdirectory of project)
-      script.sh          ← optional ticket processing script for this column
       my-ticket.md       ← ticket (.md file with YAML front matter)
     In Progress/
-      script.sh          ← optional, may differ from Backlog's script
     Done/
     _archive/            ← archived tickets (ignored by default)
+    config.json          ← optional; { "columnsOrder": ["Backlog", ...] }
   projectB/
     Backlog/
     ...
 ```
-
-Each column directory may contain a `script.sh` that defines how tickets in that column are processed. For example, a Backlog column's script might run the muse agent to plan a ticket and then move it to To Do.
 
 ## Ticket Format
 
 ```markdown
 ---
 title: Fix login bug
-priority: high        # optional
-assignee: alice       # optional
-due: 2026-05-01       # optional
-tags: [bug, auth]     # optional
-created: 2026-04-18   # set automatically on creation
+priority: high # optional
+assignee: alice # optional
+due: 2026-05-01 # optional
+tags: [bug, auth] # optional
+created: 2026-04-18 # set automatically on creation
 ---
 
 Description and notes go here.
@@ -51,92 +49,63 @@ Description and notes go here.
 
 ---
 
-## Scripts
+## CLI
 
-### Column-Level Processing Scripts
+All operations run through the `kanban-ui` binary. Build it once with `make build`,
+then invoke the subcommands below. Commands respect `KANBAN_DIR` (default `./kanban`);
+the `--dir` flag overrides the env var. Add `--json` to any list/get command for
+machine-readable output.
 
-Each column directory may contain a `script.sh` that defines how tickets in that column are processed.
-Run it with the ticket slug as argument:
 ```bash
-bash kanban/<project>/<column>/script.sh <ticket-slug>
-```
-For example, to process a Backlog ticket using its column script:
-```bash
-bash kanban/kanban-ui/Backlog/script.sh split-main-go-into-multiple-files
+./kanban-ui <command> [subcommand] [args] [flags]
+./kanban-ui help          # full usage reference
 ```
 
-The script receives the ticket slug as `$1`, reads the ticket's front matter and body,
-and can perform any processing (e.g., running an agent, generating artifacts) before
-moving the ticket to another column.
-
-### Board Utility Scripts
-
-Utility scripts live in `scripts/` alongside this SKILL.md. Run as:
-```bash
-bash scripts/<script-name> [options]
-```
-They respect the `KANBAN_DIR` env var (default: `./kanban`).
-
-All utility scripts accept `--project <name>`. If omitted and only one project exists,
-it is used automatically. With multiple projects and no `--project`, an error is shown.
+> The CLI always requires a `<project>` argument — no auto-detection. If the user
+> doesn't specify one and only one project exists, look it up first with
+> `./kanban-ui projects list`.
 
 ---
 
-### `list-projects`
-Lists all projects with column and ticket counts.
+### Projects
+
 ```bash
-bash scripts/list-projects
+./kanban-ui projects list                   # name, columns, ticket count
+./kanban-ui project info <project>
 ```
 
-### `list-columns [--project <n>] [--all]`
-Lists columns and ticket counts for a project.
-`--all` shows columns across every project.
+### Columns
+
 ```bash
-bash scripts/list-columns --project projectA
-bash scripts/list-columns --all
+./kanban-ui columns list <project>          # in configured order
 ```
 
-### `list-tickets [--project <n>] [--all] [--column <c>] [--assignee <a>] [--priority <p>] [--tag <t>]`
-Lists tickets with optional filters.
+### Tickets
+
 ```bash
-bash scripts/list-tickets --project projectA
-bash scripts/list-tickets --all
-bash scripts/list-tickets --project projectA --column "In Progress"
-bash scripts/list-tickets --all --assignee alice --priority high
+./kanban-ui tickets list <project> \
+    [--column <c>] [--assignee <a>] [--priority <p>] [--tag <t>]
+
+./kanban-ui ticket get <project> <slug>
+
+./kanban-ui ticket create <project> <column> <title> \
+    [--priority <p>] [--assignee <a>] [--due <yyyy-mm-dd>] \
+    [--tags "a,b,c"] [--body "..."]
+
+./kanban-ui ticket move <project> <slug> <target-column>
+
+./kanban-ui ticket set <project> <slug> <field> <value>
+
+./kanban-ui ticket archive <project> <slug> [--delete]
+
+./kanban-ui ticket run <project> <slug>     # executes column's script.sh
 ```
 
-### `get-ticket <slug> [--project <n>]`
-Prints the full content of a ticket (searches within the project's columns).
-```bash
-bash scripts/get-ticket fix-login-bug --project projectA
-```
+### Config
 
-### `new-ticket --column <col> --title <title> [--project <n>] [options]`
-Creates a new ticket. Column and project are created if they don't exist.
 ```bash
-bash scripts/new-ticket --project projectA --column Backlog --title "Fix login bug" \
-  --priority high --assignee alice --due 2026-05-01 --tags "bug,auth" \
-  --body "Users can't log in with SSO."
-```
-
-### `update-ticket-status <slug> <target-column> [--project <n>]`
-Moves a ticket to a different column.
-```bash
-bash scripts/update-ticket-status fix-login-bug "In Progress" --project projectA
-```
-
-### `update-ticket-field <slug> <field> <value> [--project <n>]`
-Updates a single front matter field (inserts it if missing).
-```bash
-bash scripts/update-ticket-field fix-login-bug priority critical --project projectA
-bash scripts/update-ticket-field fix-login-bug assignee bob --project projectA
-```
-
-### `archive-ticket <slug> [--project <n>] [--delete] [--yes]`
-Archives to `_archive/`, or permanently deletes with `--delete`.
-```bash
-bash scripts/archive-ticket fix-login-bug --project projectA
-bash scripts/archive-ticket fix-login-bug --project projectA --delete --yes
+./kanban-ui config get <project>
+./kanban-ui config set-order <project> "Backlog,To Do,In Progress,Done"
 ```
 
 ---
@@ -144,47 +113,46 @@ bash scripts/archive-ticket fix-login-bug --project projectA --delete --yes
 ## Workflows
 
 ### Explore the board
+
 ```bash
-bash scripts/list-projects                        # overview of all projects
-bash scripts/list-columns --all                   # all projects' columns
-bash scripts/list-tickets --project projectA      # tickets in one project
-bash scripts/list-tickets --all                   # every ticket everywhere
+./kanban-ui projects list
+./kanban-ui columns list projectA
+./kanban-ui tickets list projectA
 ```
 
-### Process a ticket from Backlog to To Do
-```bash
-bash kanban/kanban-ui/Backlog/script.sh split-main-go-into-multiple-files
-```
-The column's `script.sh` reads the ticket, runs planning (e.g., via muse agent),
-and moves it to the next stage.
+To see tickets across every project, iterate over `projects list --json`
+and call `tickets list <project>` per project.
 
 ### Plan a sprint
+
 ```bash
-bash scripts/list-tickets --project projectA --column Backlog
-bash scripts/update-ticket-status my-ticket "In Progress" --project projectA
-bash scripts/update-ticket-field my-ticket assignee alice --project projectA
+./kanban-ui tickets list projectA --column Backlog
+./kanban-ui ticket move projectA fix-login-bug "In Progress"
+./kanban-ui ticket set projectA fix-login-bug assignee alice
 ```
 
 ### Create and close a ticket
+
 ```bash
-bash scripts/new-ticket --project projectA --column Backlog --title "New feature"
-bash scripts/update-ticket-status new-feature Done --project projectA
-bash scripts/archive-ticket new-feature --project projectA
+./kanban-ui ticket create projectA Backlog "New feature"
+./kanban-ui ticket move projectA new-feature Done
+./kanban-ui ticket archive projectA new-feature
 ```
 
 ### Edit ticket body
-Use `str_replace` or `bash_tool` to edit the markdown body below the front matter directly —
-the scripts manage front matter fields and file location only.
+
+Use the `Edit` tool on the `.md` file directly — the CLI manages front matter
+fields and file location only. Find the path with
+`./kanban-ui ticket get <project> <slug> --json` (the `path` field).
 
 ---
 
 ## Notes
-- **Auto-project**: if only one project exists, `--project` can be omitted everywhere.
-- **Slug matching**: filenames are `<title-slug>-<timestamp>.md`; pass any substring of
-  the filename (without `.md`) as the slug — matching is case-insensitive.
+
+- **Slug matching**: filenames are `<title-slug>-<timestamp>.md`; pass any
+  substring of the filename (without `.md`) as the slug — matching is case-insensitive.
 - **Column names with spaces**: always quote them: `"In Progress"`.
 - **`_archive/`** is excluded from all listing commands by default.
-- **Per-column scripts**: each column's `script.sh` is independent — different columns
-  can define different processing workflows (e.g., Backlog plans tickets, In Progress
-  runs tests).
-- Utility scripts have no dependencies beyond standard Unix tools (bash, awk, find, sed).
+- **Exit codes**: 0 on success, 1 on operational error, 2 on usage error.
+  Errors go to stderr.
+- If `./kanban-ui` isn't built, run `make build` from the project root first.
