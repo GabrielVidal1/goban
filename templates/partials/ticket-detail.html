@@ -1,0 +1,54 @@
+<div class="ticket-detail">
+    <div class="detail-header">
+        <h2>{{.Ticket.Title}}</h2>
+        {{if .Ticket.Priority}}<span class="badge priority-{{.Ticket.Priority | lower}}">{{firstUpper .Ticket.Priority}}</span>{{end}}
+    </div>
+
+    <div class="detail-meta">
+        <div class="meta-row">
+            <label>Assignee:</label>
+            <span class="field-value" data-field="assignee">
+                {{if .Ticket.Assignee}}{{.Ticket.Assignee}}{{else}}<em>unassigned</em>{{end}}
+            </span>
+            <button class="btn btn-sm" hx-post="/ticket/update-field/" hx-include='[name="project"], [name="slug"]' hx-vals='{"field":"assignee","value":""}' hx-on::before-request="this.querySelector('[name=value]').value=prompt('Enter assignee:', '{{.Ticket.Assignee}}') || this.querySelector('[name=value]').value">✏️</button>
+        </div>
+        <div class="meta-row">
+            <label>Due:</label>
+            <span class="field-value" data-field="due">
+                {{if .Ticket.Due}}{{.Ticket.Due}}{{else}}<em>none</em>{{end}}
+            </span>
+            <button class="btn btn-sm" hx-post="/ticket/update-field/" hx-include='[name="project"], [name="slug"]' hx-vals='{"field":"due","value":""}' hx-on::before-request="this.querySelector('[name=value]').value=prompt('Enter due date (YYYY-MM-DD):', '{{.Ticket.Due}}') || this.querySelector('[name=value]').value">✏️</button>
+        </div>
+        <div class="meta-row">
+            <label>Priority:</label>
+            <span class="field-value" data-field="priority">
+                {{if .Ticket.Priority}}{{.Ticket.Priority | title}}{{else}}<em>none</em>{{end}}
+            </span>
+            <button class="btn btn-sm" hx-post="/ticket/update-field/" hx-include='[name="project"], [name="slug"]' hx-vals='{"field":"priority","value":""}' hx-on::before-request="this.querySelector('[name=value]').value=prompt('Enter priority (low, medium, high, critical):', '{{.Ticket.Priority}}') || this.querySelector('[name=value]').value">✏️</button>
+        </div>
+        <div class="meta-row">
+            <label>Tags:</label>
+            <span class="field-value" data-field="tags">
+                {{if gt (len .Ticket.Tags) 0}}
+                    {{range $t := .Ticket.Tags}}<span class="badge badge-sm tag-{{tagClass $t}}">{{$t}}</span>{{end}}
+                {{else}}<em>none</em>{{end}}
+            </span>
+            <button class="btn btn-sm" hx-post="/ticket/update-field/" hx-include='[name="project"], [name="slug"]' hx-vals='{"field":"tags","value":""}' hx-on::before-request="this.querySelector('[name=value]').value=prompt('Enter tags (comma-separated):', '{{range $i, $t := .Ticket.Tags}}{{if gt $i 0}}, {{end}}{{$t}}{{end}}') || this.querySelector('[name=value]').value">✏️</button>
+        </div>
+    </div>
+
+    <div class="detail-body">
+        <h3>Description</h3>
+        <div class="ticket-body-text">{{.Ticket.Body}}</div>
+    </div>
+
+    <div class="detail-footer">
+        <div class="footer-actions">
+            <button class="btn btn-warning" hx-get="/ticket/move/{{.Ticket.Slug | html}}/form?project={{.Project | html}}" hx-target="#modal-content" hx-swap="innerHTML" hx-on::after-request="openModal('Move Ticket')">📦 Move</button>
+            <button class="btn btn-danger" hx-post="/ticket/archive/{{.Ticket.Slug | html}}?project={{.Project | html}}" hx-headers='{"X-CSRF-Token":"true"}' hx-target="#modal-content" hx-swap="innerHTML" hx-on::after-request="closeModal(); htmx.reload()">🗑️ Archive</button>
+        </div>
+    </div>
+
+    <input type="hidden" name="project" value="{{.Project}}">
+    <input type="hidden" name="slug" value="{{.Ticket.Slug}}">
+</div>

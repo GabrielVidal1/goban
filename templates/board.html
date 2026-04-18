@@ -1,0 +1,42 @@
+{{template "base.html" .}}
+
+{{define "body"}}
+{{if .CurrentProject}}
+<div class="board-header">
+    <h2>{{.CurrentProject}}</h2>
+</div>
+{{end}}
+
+<div id="board" class="board">
+{{range $col := .Board.Columns}}
+<div class="column" data-column="{{$col.Name}}">
+    <div class="column-header">
+        <h3>{{$col.Name}}</h3>
+        <span class="ticket-count">{{len $col.Tickets}}</span>
+    </div>
+    <div class="column-body" hx-get="/board/columns/{{.CurrentProject | html}}/{{$col.Name | html}}/tickets" hx-trigger="revealed">
+        {{range $t := $col.Tickets}}
+        {{template "partials/ticket-card.html" $t}}
+        {{else}}
+        <div class="empty-column">No tickets</div>
+        {{end}}
+    </div>
+</div>
+{{else}}
+<div class="no-board">
+    <p>Select a project to view the board.</p>
+</div>
+{{end}}
+</div>
+
+{{if not .CurrentProject}}
+<div class="projects-grid">
+    {{range $p := .Projects}}
+    <a href="/project/{{$p.Name}}" class="project-card">
+        <h3>{{$p.Name}}</h3>
+        <span class="project-stats">{{$p.TicketCount}} tickets · {{$p.ColumnCount}} columns</span>
+    </a>
+    {{end}}
+</div>
+{{end}}
+{{end}}

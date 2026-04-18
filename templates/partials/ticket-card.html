@@ -1,0 +1,15 @@
+<div class="ticket-card" hx-get="/board/ticket/{{.Project | html}}/{{.Slug | html}}" hx-target="#modal-content" hx-swap="innerHTML" hx-on::after-request="openModal('Ticket')">
+    <div class="ticket-header">
+        <span class="ticket-title">{{.Title}}</span>
+        {{if .Priority}}<span class="badge badge-sm priority-{{.Priority | lower}}">{{firstUpper .Priority}}</span>{{end}}
+    </div>
+    <div class="ticket-meta">
+        {{if .Assignee}}<span class="meta-item" title="Assignee: {{.Assignee}}">@{{.Assignee}}</span>{{end}}
+        {{if .Due}}<span class="meta-item due{{if isOverdue .Due}} overdue{{end}}" title="Due: {{.Due}}">📅 {{.Due}}</span>{{end}}
+    </div>
+    {{if gt (len .Tags) 0}}
+    <div class="ticket-tags">
+        {{range $t := .Tags}}<span class="badge badge-sm tag-{{tagClass $t}}">{{$t}}</span>{{end}}
+    </div>
+    {{end}}
+</div>
