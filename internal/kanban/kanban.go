@@ -3,6 +3,7 @@ package kanban
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -523,4 +524,48 @@ func extractTitle(content string) string {
 		}
 	}
 	return title
+}
+
+// RunScript executes script.sh from the ticket's column folder with the ticket slug as an argument.
+func RunScript(kanbanDir, projectName, slug string) (string, error) {
+	if kanbanDir == "" {
+		kanbanDir = defaultKanbanDir
+	}
+	projDir := filepath.Join(kanbanDir, projectName)
+
+	var ticketPath string
+	err := filepath.Walk(projDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(info.Name(), ".md") {
+			return nil
+		}
+		nameLower := strings.ToLower(info.Name())
+		slugLower := strings.ToLower(slug)
+		if strings.Contains(nameLower, slugLower) {
+			ticketPath = path
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if ticketPath == "" {
+		return "", fmt.Errorf("ticket '%s' not found in %s", slug, projDir)
+	}
+
+	ticket, err := ParseTicket(ticketPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse ticket: %w", err)
+	}
+
+	scriptPath := filepath.Join(filepath.Dir(ticketPath), "script.sh")
+	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("no script.sh found in column folder '%s'", ticket.Column)
+	}
+
+	cmd := exec.Command("bash", scriptPath, slug)
+	cmd.Dir = filepath.Join(kanbanDir, projectName, ticket.Column)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("script execution failed: %w\noutput: %s", err, string(output))
+	}
+
+	return string(output), nil
 }

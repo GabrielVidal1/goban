@@ -52,6 +52,7 @@ func main() {
 	mux.HandleFunc("POST /api/tickets/{slug}/move", handleAPIMoveTicket(kanbanDir))
 	mux.HandleFunc("POST /api/tickets/{slug}/field", handleAPIUpdateField(kanbanDir))
 	mux.HandleFunc("DELETE /api/tickets/{slug}", handleAPIArchiveTicket(kanbanDir))
+	mux.HandleFunc("POST /api/tickets/{slug}/run", handleAPIScriptRun(kanbanDir))
 
 	// SSE
 	go startFileWatcher(kanbanDir)
@@ -328,6 +329,30 @@ func handleAPIArchiveTicket(kanbanDir string) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"message": "archived"})
+	}
+}
+
+func handleAPIScriptRun(kanbanDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		var req struct {
+			Project string `json:"project"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if req.Project == "" {
+			writeError(w, http.StatusBadRequest, "project is required")
+			return
+		}
+
+		output, err := kanban.RunScript(kanbanDir, req.Project, slug)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"output": output})
 	}
 }
 

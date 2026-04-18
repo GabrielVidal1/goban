@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# update-ticket-status <slug> <target-column> [--project <n>]
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/_common.sh"
+
+PROJECT_ARG=""
+POSITIONAL=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --project) PROJECT_ARG="$2"; shift 2 ;;
+    *) POSITIONAL+=("$1"); shift ;;
+  esac
+done
+
+if [[ ${#POSITIONAL[@]} -lt 2 ]]; then
+  echo "Usage: update-ticket-status <slug> <target-column> [--project <n>]" >&2; exit 1
+fi
+
+QUERY="${POSITIONAL[0]}"
+TARGET_COL="${POSITIONAL[1]}"
+
+resolve_project
+
+TICKET_FILE=$(find_ticket "$PROJECT_DIR" "$QUERY")
+SRC_COL=$(basename "$(dirname "$TICKET_FILE")")
+FILE=$(basename "$TICKET_FILE")
+TARGET_DIR="$PROJECT_DIR/$TARGET_COL"
+
+if [[ "$SRC_COL" == "$TARGET_COL" ]]; then
+  echo "Ticket '$FILE' is already in '$TARGET_COL'."; exit 0
+fi
+
+mkdir -p "$TARGET_DIR"
+mv "$TICKET_FILE" "$TARGET_DIR/$FILE"
+echo "Moved '$FILE': $SRC_COL → $TARGET_COL  (project: $PROJECT_NAME)"

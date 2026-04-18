@@ -54,4 +54,11 @@ export const api = {
       { method: 'DELETE' }
     )
   },
+
+  runScript(slug: string, data: { project: string }): Promise<{ output: string }> {
+    return apiFetch(`/api/tickets/${encodeURIComponent(slug)}/run`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    })
+  },
 }

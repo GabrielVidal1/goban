@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import type { Ticket } from '../../types/kanban'
 import { Badge, getPriorityVariant, getTagVariant } from '../ui/Badge'
 import { useModal } from '../../context/ModalContext'
@@ -15,6 +16,22 @@ interface TicketDetailProps {
 export function TicketDetail({ ticket, columns, onRefresh }: TicketDetailProps) {
   const { openModal, closeModal } = useModal()
   const { showToast } = useToast()
+  const [isRunning, setIsRunning] = useState(false)
+
+  const handleRunScript = async () => {
+    if (isRunning) return
+    setIsRunning(true)
+    try {
+      await api.runScript(ticket.slug, { project: ticket.project })
+      showToast(`Script completed for ${ticket.title}`)
+      closeModal()
+      onRefresh()
+    } catch (err) {
+      showToast(err instanceof ApiError ? err.message : 'Failed to run script', 'error')
+    } finally {
+      setIsRunning(false)
+    }
+  }
 
   const handleMove = () => {
     openModal('Move ticket', (
@@ -111,6 +128,13 @@ export function TicketDetail({ ticket, columns, onRefresh }: TicketDetailProps) 
 
       <div className="border-t border-border pt-3 mt-[14px]">
         <div className="flex gap-1.5 flex-wrap items-center">
+          <button
+            onClick={handleRunScript}
+            disabled={isRunning}
+            className="inline-flex items-center gap-[5px] h-[30px] px-[10px] rounded-sm text-[12.5px] font-medium cursor-pointer transition-all bg-bg-elev border border-border text-fg hover:bg-bg-hover hover:border-border-strong disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {isRunning ? 'Running...' : 'Start'}
+          </button>
           <button
             onClick={handleMove}
             className="inline-flex items-center gap-[5px] h-[30px] px-[10px] rounded-sm text-[12.5px] font-medium cursor-pointer transition-all bg-bg-elev border border-border text-fg hover:bg-bg-hover hover:border-border-strong"

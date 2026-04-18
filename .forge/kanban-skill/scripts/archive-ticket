@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# archive-ticket <slug> [--project <n>] [--delete] [--yes]
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/_common.sh"
+
+PROJECT_ARG=""
+DELETE=0 YES=0 QUERY=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --project) PROJECT_ARG="$2"; shift 2 ;;
+    --delete)  DELETE=1; shift ;;
+    --yes)     YES=1;    shift ;;
+    *)         QUERY="$1"; shift ;;
+  esac
+done
+
+if [[ -z "$QUERY" ]]; then
+  echo "Usage: archive-ticket <slug> [--project <n>] [--delete] [--yes]" >&2; exit 1
+fi
+
+resolve_project
+
+TICKET_FILE=$(find_ticket "$PROJECT_DIR" "$QUERY")
+FILE=$(basename "$TICKET_FILE")
+ARCHIVE_DIR="$PROJECT_DIR/_archive"
+
+if [[ $DELETE -eq 1 ]]; then
+  if [[ $YES -eq 0 ]]; then
+    read -r -p "Permanently delete '$FILE'? [y/N] " CONFIRM
+    [[ "${CONFIRM,,}" != "y" ]] && echo "Aborted." && exit 0
+  fi
+  rm "$TICKET_FILE"
+  echo "Deleted: $FILE  (project: $PROJECT_NAME)"
+else
+  mkdir -p "$ARCHIVE_DIR"
+  mv "$TICKET_FILE" "$ARCHIVE_DIR/$FILE"
+  echo "Archived '$FILE' → $PROJECT_NAME/_archive/"
+fi
