@@ -2,8 +2,8 @@ root = "."
 tmp_dir = "tmp"
 
 [build]
-  cmd = "go build -o ./tmp/kanban-ui ."
-  bin = "./tmp/kanban-ui"
+  cmd = "go build -o ./kanban-ui ."
+  bin = "./kanban-ui"
   include_ext = ["go"]
   exclude_dir = ["ui", "tmp"]
   delay = 500

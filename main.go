@@ -2,12 +2,14 @@ package main
 
 import (
 	"embed"
+	"flag"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
 
 	"kanban-ui/internal/cli"
+	"kanban-ui/internal/config"
 	"kanban-ui/internal/server"
 )
 
@@ -15,44 +17,40 @@ import (
 var uiFiles embed.FS
 
 func main() {
+	// CLI mode: load config from env/.env, then dispatch.
 	if len(os.Args) > 1 && cli.Commands[os.Args[1]] {
-		os.Exit(cli.Run(os.Args[1:]))
+		os.Exit(cli.Run(os.Args[1:], config.Load("", "")))
 	}
 
-	kanbanDir := os.Getenv("KANBAN_DIR")
-	if kanbanDir == "" {
-		kanbanDir = "./kanban"
-	}
+	// Server mode: parse flags first so they can override env/.env.
+	dir := flag.String("dir", "", "kanban directory (overrides KANBAN_DIR)")
+	port := flag.String("port", "", "listen port (overrides PORT)")
+	flag.Parse()
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
+	cfg := config.Load(*dir, *port)
 
-	// Generate or load auth token
-	token := os.Getenv("AUTH_TOKEN")
-	if token == "" {
-		token = server.GenerateAuthToken()
+	if cfg.AuthToken == "" {
+		cfg.AuthToken = server.GenerateAuthToken()
 	}
-	server.SetAuthToken(token)
+	server.SetAuthToken(cfg.AuthToken)
 
-	log.Printf("Kanban UI starting on http://localhost:%s?token=%s", port, token)
+	log.Printf("Kanban UI starting on http://localhost:%s?token=%s", cfg.Port, cfg.AuthToken)
 
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /api/projects", server.AuthMiddleware(server.HandleAPIListProjects(kanbanDir)))
-	mux.HandleFunc("GET /api/projects/{name}", server.AuthMiddleware(server.HandleAPIGetProject(kanbanDir)))
-	mux.HandleFunc("GET /api/projects/{project}/columns", server.AuthMiddleware(server.HandleAPIListColumns(kanbanDir)))
-	mux.HandleFunc("GET /api/projects/{project}/tickets/{slug}", server.AuthMiddleware(server.HandleAPIGetTicket(kanbanDir)))
-	mux.HandleFunc("POST /api/tickets", server.AuthMiddleware(server.HandleAPICreateTicket(kanbanDir)))
-	mux.HandleFunc("POST /api/tickets/{slug}/move", server.AuthMiddleware(server.HandleAPIMoveTicket(kanbanDir)))
-	mux.HandleFunc("POST /api/tickets/{slug}/field", server.AuthMiddleware(server.HandleAPIUpdateField(kanbanDir)))
-	mux.HandleFunc("DELETE /api/tickets/{slug}", server.AuthMiddleware(server.HandleAPIArchiveTicket(kanbanDir)))
-	mux.HandleFunc("POST /api/tickets/{slug}/run", server.AuthMiddleware(server.HandleAPIScriptRun(kanbanDir)))
-	mux.HandleFunc("GET /api/projects/{project}/config", server.AuthMiddleware(server.HandleAPIGetProjectConfig(kanbanDir)))
-	mux.HandleFunc("PUT /api/projects/{project}/config", server.AuthMiddleware(server.HandleAPIUpdateProjectConfig(kanbanDir)))
+	mux.HandleFunc("GET /api/projects", server.AuthMiddleware(server.HandleAPIListProjects(cfg.KanbanDir)))
+	mux.HandleFunc("GET /api/projects/{name}", server.AuthMiddleware(server.HandleAPIGetProject(cfg.KanbanDir)))
+	mux.HandleFunc("GET /api/projects/{project}/columns", server.AuthMiddleware(server.HandleAPIListColumns(cfg.KanbanDir)))
+	mux.HandleFunc("GET /api/projects/{project}/tickets/{slug}", server.AuthMiddleware(server.HandleAPIGetTicket(cfg.KanbanDir)))
+	mux.HandleFunc("POST /api/tickets", server.AuthMiddleware(server.HandleAPICreateTicket(cfg.KanbanDir)))
+	mux.HandleFunc("POST /api/tickets/{slug}/move", server.AuthMiddleware(server.HandleAPIMoveTicket(cfg.KanbanDir)))
+	mux.HandleFunc("POST /api/tickets/{slug}/field", server.AuthMiddleware(server.HandleAPIUpdateField(cfg.KanbanDir)))
+	mux.HandleFunc("DELETE /api/tickets/{slug}", server.AuthMiddleware(server.HandleAPIArchiveTicket(cfg.KanbanDir)))
+	mux.HandleFunc("POST /api/tickets/{slug}/run", server.AuthMiddleware(server.HandleAPIScriptRun(cfg.KanbanDir)))
+	mux.HandleFunc("GET /api/projects/{project}/config", server.AuthMiddleware(server.HandleAPIGetProjectConfig(cfg.KanbanDir)))
+	mux.HandleFunc("PUT /api/projects/{project}/config", server.AuthMiddleware(server.HandleAPIUpdateProjectConfig(cfg.KanbanDir)))
 
-	go server.StartFileWatcher(kanbanDir)
+	go server.StartFileWatcher(cfg.KanbanDir)
 	mux.HandleFunc("/events", server.HandleSSE)
 
 	distFS, err := fs.Sub(uiFiles, "ui/dist")
@@ -61,7 +59,7 @@ func main() {
 	}
 	mux.HandleFunc("/", server.SPAHandler(distFS))
 
-	if err := http.ListenAndServe(":"+port, mux); err != nil {
+	if err := http.ListenAndServe(":"+cfg.Port, mux); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
 }

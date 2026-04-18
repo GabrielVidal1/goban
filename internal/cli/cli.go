@@ -9,8 +9,11 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"kanban-ui/internal/config"
 	"kanban-ui/internal/kanban"
 )
+
+var globalConfig *config.Config
 
 // Commands lists every top-level CLI subcommand. main.go checks this to decide
 // between CLI mode and server mode.
@@ -27,7 +30,8 @@ var Commands = map[string]bool{
 }
 
 // Run dispatches the CLI. Returns the process exit code.
-func Run(args []string) int {
+func Run(args []string, cfg *config.Config) int {
+	globalConfig = cfg
 	if len(args) == 0 {
 		printUsage(os.Stderr)
 		return 2
@@ -100,7 +104,13 @@ func joinKeys(m map[string]cmdFunc) string {
 
 // addCommonFlags registers --dir on fs. If asJSON is non-nil, also registers --json.
 func addCommonFlags(fs *flag.FlagSet, dir *string, asJSON *bool) {
-	fs.StringVar(dir, "dir", os.Getenv("KANBAN_DIR"), "kanban data directory (overrides KANBAN_DIR)")
+	defaultDir := ""
+	if globalConfig != nil {
+		defaultDir = globalConfig.KanbanDir
+	} else {
+		defaultDir = os.Getenv("KANBAN_DIR")
+	}
+	fs.StringVar(dir, "dir", defaultDir, "kanban data directory (overrides KANBAN_DIR)")
 	if asJSON != nil {
 		fs.BoolVar(asJSON, "json", false, "output as JSON")
 	}
