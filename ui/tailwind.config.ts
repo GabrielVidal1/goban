@@ -1,0 +1,58 @@
+import type { Config } from 'tailwindcss'
+
+export default {
+  content: ['./index.html', './src/**/*.{ts,tsx}'],
+  darkMode: ['selector', '[data-theme="dark"]'],
+  theme: {
+    extend: {
+      colors: {
+        bg:               'var(--bg)',
+        'bg-elev':        'var(--bg-elev)',
+        'bg-sunken':      'var(--bg-sunken)',
+        'bg-hover':       'var(--bg-hover)',
+        'bg-active':      'var(--bg-active)',
+        fg:               'var(--fg)',
+        'fg-muted':       'var(--fg-muted)',
+        'fg-faint':       'var(--fg-faint)',
+        'fg-dim':         'var(--fg-dim)',
+        border:           'var(--border)',
+        'border-strong':  'var(--border-strong)',
+        'border-subtle':  'var(--border-subtle)',
+        accent:           'var(--accent)',
+        'accent-hover':   'var(--accent-hover)',
+        'accent-soft':    'var(--accent-soft)',
+        'accent-fg':      'var(--accent-fg)',
+        's-red':          'var(--s-red)',
+        's-red-bg':       'var(--s-red-bg)',
+        's-amber':        'var(--s-amber)',
+        's-amber-bg':     'var(--s-amber-bg)',
+        's-yellow':       'var(--s-yellow)',
+        's-yellow-bg':    'var(--s-yellow-bg)',
+        's-green':        'var(--s-green)',
+        's-green-bg':     'var(--s-green-bg)',
+        's-blue':         'var(--s-blue)',
+        's-blue-bg':      'var(--s-blue-bg)',
+        's-purple':       'var(--s-purple)',
+        's-purple-bg':    'var(--s-purple-bg)',
+        's-gray':         'var(--s-gray)',
+        's-gray-bg':      'var(--s-gray-bg)',
+      },
+      fontFamily: {
+        sans: ['Geist', 'ui-sans-serif', 'system-ui', '-apple-system', 'sans-serif'],
+        mono: ['JetBrains Mono', 'ui-monospace', 'SF Mono', 'Menlo', 'monospace'],
+      },
+      borderRadius: {
+        xs: 'var(--r-xs)',
+        sm: 'var(--r-sm)',
+        md: 'var(--r-md)',
+        lg: 'var(--r-lg)',
+      },
+      boxShadow: {
+        card:  'var(--shadow-card)',
+        pop:   'var(--shadow-pop)',
+        modal: 'var(--shadow-modal)',
+      },
+    },
+  },
+  plugins: [],
+} satisfies Config

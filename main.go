@@ -2,20 +2,33 @@ package main
 
 import (
 	"embed"
-	"fmt"
-	"html/template"
+	"encoding/json"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
-	"time"
+	"sync"
 
+	"github.com/fsnotify/fsnotify"
 	"kanban-ui/internal/kanban"
 )
 
-//go:embed templates static
-var embeddedFiles embed.FS
+var (
+	sseClients   []chan string
+	sseClientsMu sync.Mutex
+)
+
+//go:embed ui/dist
+var uiFiles embed.FS
+
+// ticketJSON suppresses the internal filesystem path from API responses.
+type ticketJSON struct {
+	kanban.Ticket
+	Path string `json:"path,omitempty"`
+}
 
 func main() {
 	kanbanDir := os.Getenv("KANBAN_DIR")
@@ -28,37 +41,28 @@ func main() {
 		port = "8080"
 	}
 
-	tmpl, err := loadTemplates()
-	if err != nil {
-		log.Fatalf("Failed to load templates: %v", err)
-	}
-
 	mux := http.NewServeMux()
 
-	// Page routes
-	mux.HandleFunc("/", handleBoard(tmpl, kanbanDir))
-	mux.HandleFunc("/project/", handleProjectBoard(tmpl, kanbanDir))
+	// JSON API
+	mux.HandleFunc("GET /api/projects", handleAPIListProjects(kanbanDir))
+	mux.HandleFunc("GET /api/projects/{name}", handleAPIGetProject(kanbanDir))
+	mux.HandleFunc("GET /api/projects/{project}/columns", handleAPIListColumns(kanbanDir))
+	mux.HandleFunc("GET /api/projects/{project}/tickets/{slug}", handleAPIGetTicket(kanbanDir))
+	mux.HandleFunc("POST /api/tickets", handleAPICreateTicket(kanbanDir))
+	mux.HandleFunc("POST /api/tickets/{slug}/move", handleAPIMoveTicket(kanbanDir))
+	mux.HandleFunc("POST /api/tickets/{slug}/field", handleAPIUpdateField(kanbanDir))
+	mux.HandleFunc("DELETE /api/tickets/{slug}", handleAPIArchiveTicket(kanbanDir))
 
-	// HTMX partials - Board views
-	mux.HandleFunc("/board/columns/", handleColumnTickets(tmpl, kanbanDir))
-	mux.HandleFunc("/board/ticket/", handleTicketDetail(tmpl, kanbanDir))
+	// SSE
+	go startFileWatcher(kanbanDir)
+	mux.HandleFunc("/events", handleSSE)
 
-	// HTMX action forms
-	mux.HandleFunc("/ticket/new/form", handleNewTicketForm(tmpl, kanbanDir))
-	mux.HandleFunc("/ticket/move/{slug}/form", handleMoveTicketForm(tmpl, kanbanDir))
-
-	// HTMX action endpoints (POST)
-	mux.HandleFunc("/ticket/create", handleCreateTicket(kanbanDir))
-	mux.HandleFunc("/ticket/move/", handleMoveTicket(kanbanDir))
-	mux.HandleFunc("/ticket/update-field/", handleUpdateField(kanbanDir))
-	mux.HandleFunc("/ticket/archive/{slug}", handleArchiveTicket(kanbanDir))
-
-	// Static files
-	staticFS, err := fs.Sub(embeddedFiles, "static")
+	// SPA
+	distFS, err := fs.Sub(uiFiles, "ui/dist")
 	if err != nil {
-		log.Fatalf("Failed to create static sub-FS: %v", err)
+		log.Fatalf("Failed to create dist sub-FS: %v", err)
 	}
-	mux.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.FS(staticFS))))
+	mux.HandleFunc("/", spaHandler(distFS))
 
 	log.Printf("Kanban UI starting on :%s (KANBAN_DIR=%s)", port, kanbanDir)
 	if err := http.ListenAndServe(":"+port, mux); err != nil {
@@ -66,292 +70,346 @@ func main() {
 	}
 }
 
-func loadTemplates() (*template.Template, error) {
-	funcMap := template.FuncMap{
-		"upper":    strings.ToUpper,
-		"lower":    strings.ToLower,
-		"title":    strings.ToTitle,
-		"firstUpper": func(s string) string {
-			if s == "" { return s }
-			return strings.ToUpper(s[:1]) + s[1:]
-		},
-		"firstLower": func(s string) string {
-			if s == "" { return s }
-			return strings.ToLower(s[:1]) + s[1:]
-		},
-		"truncate": func(s string, n int) string {
-			if len(s) <= n { return s }
-			return s[:n] + "..."
-		},
-		"priorityClass": func(p string) string {
-			switch strings.ToLower(p) {
-			case "critical", "blocker": return "priority-critical"
-			case "high": return "priority-high"
-			case "medium": return "priority-medium"
-			case "low": return "priority-low"
-			default: return ""
-			}
-		},
-		"tagClass": func(t string) string {
-			switch strings.ToLower(t) {
-			case "bug", "fix": return "tag-bug"
-			case "feature", "feat": return "tag-feature"
-			case "improvement", "enhancement": return "tag-improvement"
-			default: return "tag-default"
-			}
-		},
-		"isOverdue": func(due string) bool {
-			if due == "" { return false }
-			d, err := time.Parse("2006-01-02", due)
-			if err != nil { return false }
-			return d.Before(time.Now())
-		},
-	}
+// ---- SPA Handler ----
 
-	tmpl := template.New("").Funcs(funcMap)
-
-	templateFiles, err := fs.Sub(embeddedFiles, "templates")
-	if err != nil {
-		return nil, fmt.Errorf("failed to create templates sub-FS: %w", err)
-	}
-
-	err = fs.WalkDir(templateFiles, ".", func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".html") { return nil }
-		data, err := embeddedFiles.ReadFile("templates/" + path)
-		if err != nil { return err }
-		_, err = tmpl.New(path).Parse(string(data))
-		return err
-	})
-
-	return tmpl, err
-}
-
-// ---- Page Handlers ----
-
-func handleBoard(tmpl *template.Template, kanbanDir string) http.HandlerFunc {
+func spaHandler(distFS fs.FS) http.HandlerFunc {
+	fileServer := http.FileServer(http.FS(distFS))
 	return func(w http.ResponseWriter, r *http.Request) {
-		projects, _ := kanban.ListProjects(kanbanDir)
-
-		type ProjectSummary struct {
-			Name        string
-			ColumnCount int
-			TicketCount int
+		path := strings.TrimPrefix(r.URL.Path, "/")
+		if path == "" {
+			path = "index.html"
 		}
-
-		var summaries []ProjectSummary
-		for _, p := range projects {
-			info, err := kanban.GetProjectInfo(kanbanDir, p)
-			if err != nil { continue }
-			summaries = append(summaries, ProjectSummary{
-				Name: info.Name, ColumnCount: len(info.Columns), TicketCount: info.TicketCount,
-			})
+		f, err := distFS.Open(path)
+		if err == nil {
+			f.Close()
+			fileServer.ServeHTTP(w, r)
+			return
 		}
-
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		tmpl.ExecuteTemplate(w, "board.html", map[string]interface{}{
-			"Projects": summaries, "KanbanDir": kanbanDir,
-		})
-	}
-}
-
-func handleProjectBoard(tmpl *template.Template, kanbanDir string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		projectName := strings.TrimPrefix(r.URL.Path, "/project/")
-		if projectName == "" || projectName == "/" { return }
-
-		board, err := kanban.GetBoardData(kanbanDir, projectName)
+		// Fall through to index.html for React Router client-side routes
+		index, err := distFS.Open("index.html")
 		if err != nil {
-			http.Error(w, "Project not found", http.StatusNotFound)
+			http.NotFound(w, r)
+			return
+		}
+		defer index.Close()
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		io.Copy(w, index)
+	}
+}
+
+// ---- JSON helpers ----
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+func sanitizeTicket(t *kanban.Ticket) map[string]any {
+	return map[string]any{
+		"title":    t.Title,
+		"priority": t.Priority,
+		"assignee": t.Assignee,
+		"due":      t.Due,
+		"tags":     t.Tags,
+		"created":  t.Created,
+		"body":     t.Body,
+		"slug":     t.Slug,
+		"column":   t.Column,
+		"project":  t.Project,
+	}
+}
+
+// ---- API Handlers ----
+
+func handleAPIListProjects(kanbanDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		projects, err := kanban.ListProjects(kanbanDir)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
 
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		tmpl.ExecuteTemplate(w, "board.html", map[string]interface{}{
-			"CurrentProject": projectName, "Board": board,
-			"AllProjects": getProjectList(kanbanDir), "KanbanDir": kanbanDir,
-		})
-	}
-}
-
-func handleColumnTickets(tmpl *template.Template, kanbanDir string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		path := strings.TrimPrefix(r.URL.Path, "/board/columns/")
-		parts := strings.SplitN(path, "/", 2)
-		if len(parts) < 2 || parts[1] != "tickets" { return }
-
-		projectName, columnName := parts[0], parts[1]
-		board, err := kanban.GetBoardData(kanbanDir, projectName)
-		if err != nil { http.Error(w, "Project not found", http.StatusNotFound); return }
-
-		var tickets []kanban.Ticket
-		for _, col := range board.Columns {
-			if col.Name == columnName { tickets = col.Tickets; break }
+		type projectSummary struct {
+			Name        string   `json:"name"`
+			Columns     []string `json:"columns"`
+			TicketCount int      `json:"ticket_count"`
 		}
 
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		tmpl.ExecuteTemplate(w, "partials/ticket-list.html", map[string]interface{}{
-			"Project": projectName, "Column": columnName, "Tickets": tickets,
-			"AllProjects": getProjectList(kanbanDir),
-		})
-	}
-}
-
-func handleTicketDetail(tmpl *template.Template, kanbanDir string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		path := strings.TrimPrefix(r.URL.Path, "/board/ticket/")
-		parts := strings.SplitN(path, "/", 2)
-		if len(parts) < 2 { return }
-
-		projectName, slug := parts[0], parts[1]
-		ticket, err := kanban.GetTicket(kanbanDir, projectName, slug)
-		if err != nil { http.Error(w, "Ticket not found", http.StatusNotFound); return }
-
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		tmpl.ExecuteTemplate(w, "partials/ticket-detail.html", map[string]interface{}{
-			"Project": projectName, "Ticket": ticket,
-			"AllProjects": getProjectList(kanbanDir),
-		})
-	}
-}
-
-// ---- Action Handlers (HTMX) ----
-
-func handleNewTicketForm(tmpl *template.Template, kanbanDir string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		projectName := r.URL.Query().Get("project")
-
-		var columns []string
-		if projectName != "" {
-			cols, _ := kanban.ListColumns(kanbanDir, projectName)
-			columns = cols
-		} else {
-			type ColInfo struct{ Project, Name string }
-			var allCols []ColInfo
-			projects, _ := kanban.ListProjects(kanbanDir)
-			for _, p := range projects {
-				cols, _ := kanban.ListColumns(kanbanDir, p)
-				for _, c := range cols { allCols = append(allCols, ColInfo{Project: p, Name: c}) }
+		result := make([]projectSummary, 0, len(projects))
+		for _, p := range projects {
+			info, err := kanban.GetProjectInfo(kanbanDir, p)
+			if err != nil {
+				continue
 			}
-			columns = make([]string, 0, len(allCols))
-			for _, c := range allCols { columns = append(columns, fmt.Sprintf("%s/%s", c.Project, c.Name)) }
+			result = append(result, projectSummary{
+				Name:        info.Name,
+				Columns:     info.Columns,
+				TicketCount: info.TicketCount,
+			})
 		}
-
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		tmpl.ExecuteTemplate(w, "partials/new-ticket-form.html", map[string]interface{}{
-			"Project": projectName, "Columns": columns,
-			"AllProjects": getProjectList(kanbanDir),
-		})
+		writeJSON(w, http.StatusOK, result)
 	}
 }
 
-func handleCreateTicket(kanbanDir string) http.HandlerFunc {
+func handleAPIGetProject(kanbanDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
+		name := r.PathValue("name")
+		board, err := kanban.GetBoardData(kanbanDir, name)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
 
-		column := r.FormValue("column")
-		title := r.FormValue("title")
-		priority := r.FormValue("priority")
-		assignee := r.FormValue("assignee")
-		due := r.FormValue("due")
-		tags := r.FormValue("tags")
-		body := r.FormValue("body")
+		type colJSON struct {
+			Name    string           `json:"name"`
+			Tickets []map[string]any `json:"tickets"`
+		}
+		type boardJSON struct {
+			Project string    `json:"project"`
+			Columns []colJSON `json:"columns"`
+		}
 
-		if title == "" { http.Error(w, "Title is required", http.StatusBadRequest); return }
+		cols := make([]colJSON, len(board.Columns))
+		for i, col := range board.Columns {
+			tickets := make([]map[string]any, len(col.Tickets))
+			for j := range col.Tickets {
+				tickets[j] = sanitizeTicket(&col.Tickets[j])
+			}
+			cols[i] = colJSON{Name: col.Name, Tickets: tickets}
+		}
+		writeJSON(w, http.StatusOK, boardJSON{Project: board.Project, Columns: cols})
+	}
+}
 
-		var project string
-		parts := strings.SplitN(column, "/", 2)
-		if len(parts) == 2 {
-			project = parts[0]
-			column = parts[1]
-		} else if r.FormValue("project") != "" {
-			project = r.FormValue("project")
+func handleAPIListColumns(kanbanDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		project := r.PathValue("project")
+		cols, err := kanban.ListColumns(kanbanDir, project)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, cols)
+	}
+}
+
+func handleAPIGetTicket(kanbanDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		project := r.PathValue("project")
+		slug := r.PathValue("slug")
+		ticket, err := kanban.GetTicket(kanbanDir, project, slug)
+		if err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, sanitizeTicket(ticket))
+	}
+}
+
+func handleAPICreateTicket(kanbanDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Project  string `json:"project"`
+			Column   string `json:"column"`
+			Title    string `json:"title"`
+			Priority string `json:"priority"`
+			Assignee string `json:"assignee"`
+			Due      string `json:"due"`
+			Tags     string `json:"tags"`
+			Body     string `json:"body"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if req.Title == "" {
+			writeError(w, http.StatusBadRequest, "title is required")
+			return
+		}
+		if req.Column == "" {
+			writeError(w, http.StatusBadRequest, "column is required")
+			return
 		}
 
 		opts := map[string]string{}
-		if priority != "" { opts["priority"] = priority }
-		if assignee != "" { opts["assignee"] = assignee }
-		if due != "" { opts["due"] = due }
-		if tags != "" { opts["tags"] = tags }
-		if body != "" { opts["body"] = body }
+		if req.Priority != "" {
+			opts["priority"] = req.Priority
+		}
+		if req.Assignee != "" {
+			opts["assignee"] = req.Assignee
+		}
+		if req.Due != "" {
+			opts["due"] = req.Due
+		}
+		if req.Tags != "" {
+			opts["tags"] = req.Tags
+		}
+		if req.Body != "" {
+			opts["body"] = req.Body
+		}
 
-		ticket, err := kanban.CreateTicket(kanbanDir, project, column, title, opts)
-		if err != nil { http.Error(w, "Failed to create ticket: "+err.Error(), http.StatusInternalServerError); return }
-
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, `<div class="ticket-card" hx-get="/board/ticket/%s/%s" hx-target="#modal-content" hx-swap="innerHTML">
-			<div class="ticket-header"><span class="ticket-title">%s</span>%s</div>
-			<div class="ticket-meta">%v</div>
-		</div>`, project, ticket.Slug, escapeHTML(ticket.Title), priorityBadge(ticket.Priority), tagBadges(ticket.Tags))
+		ticket, err := kanban.CreateTicket(kanbanDir, req.Project, req.Column, req.Title, opts)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, sanitizeTicket(ticket))
 	}
 }
 
-func handleMoveTicketForm(tmpl *template.Template, kanbanDir string) http.HandlerFunc {
+func handleAPIMoveTicket(kanbanDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slug := r.PathValue("slug")
-		projectName := r.URL.Query().Get("project")
+		var req struct {
+			Project      string `json:"project"`
+			TargetColumn string `json:"target_column"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if req.Project == "" || req.TargetColumn == "" {
+			writeError(w, http.StatusBadRequest, "project and target_column are required")
+			return
+		}
 
-		ticket, err := kanban.GetTicket(kanbanDir, projectName, slug)
-		if err != nil { http.Error(w, "Ticket not found", http.StatusNotFound); return }
-
-		columns, _ := kanban.ListColumns(kanbanDir, projectName)
-
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		tmpl.ExecuteTemplate(w, "partials/move-ticket-form.html", map[string]interface{}{
-			"Project": projectName, "Ticket": ticket, "Columns": columns,
-			"AllProjects": getProjectList(kanbanDir),
-		})
+		ticket, err := kanban.UpdateTicketStatus(kanbanDir, req.Project, slug, req.TargetColumn)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, sanitizeTicket(ticket))
 	}
 }
 
-func handleMoveTicket(kanbanDir string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
-
-		slug := r.FormValue("slug")
-		targetColumn := r.FormValue("target_column")
-		projectName := r.FormValue("project")
-
-		if targetColumn == "" || projectName == "" { http.Error(w, "Missing required fields", http.StatusBadRequest); return }
-
-		ticket, err := kanban.UpdateTicketStatus(kanbanDir, projectName, slug, targetColumn)
-		if err != nil { http.Error(w, "Failed to move ticket: "+err.Error(), http.StatusInternalServerError); return }
-
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, `<div class="alert alert-success">Moved "%s" to %s</div>`, escapeHTML(ticket.Title), escapeHTML(targetColumn))
-	}
-}
-
-func handleUpdateField(kanbanDir string) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
-
-		slug := r.FormValue("slug")
-		field := r.FormValue("field")
-		value := r.FormValue("value")
-		projectName := r.FormValue("project")
-
-		if field == "" || projectName == "" { http.Error(w, "Missing required fields", http.StatusBadRequest); return }
-
-		ticket, err := kanban.UpdateTicketField(kanbanDir, projectName, slug, field, value)
-		if err != nil { http.Error(w, "Failed to update: "+err.Error(), http.StatusInternalServerError); return }
-
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, `<span class="field-value" data-field="%s">%s</span>`, field, formatFieldValue(field, ticket))
-	}
-}
-
-func handleArchiveTicket(kanbanDir string) http.HandlerFunc {
+func handleAPIUpdateField(kanbanDir string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		slug := r.PathValue("slug")
-		projectName := r.URL.Query().Get("project")
+		var req struct {
+			Project string `json:"project"`
+			Field   string `json:"field"`
+			Value   string `json:"value"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+		if req.Field == "" || req.Project == "" {
+			writeError(w, http.StatusBadRequest, "project and field are required")
+			return
+		}
 
-		if projectName == "" { http.Error(w, "Missing project", http.StatusBadRequest); return }
+		ticket, err := kanban.UpdateTicketField(kanbanDir, req.Project, slug, req.Field, req.Value)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, sanitizeTicket(ticket))
+	}
+}
 
-		err := kanban.ArchiveTicket(kanbanDir, projectName, slug, false)
-		if err != nil { http.Error(w, "Failed to archive: "+err.Error(), http.StatusInternalServerError); return }
+func handleAPIArchiveTicket(kanbanDir string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		slug := r.PathValue("slug")
+		project := r.URL.Query().Get("project")
+		if project == "" {
+			writeError(w, http.StatusBadRequest, "project query parameter is required")
+			return
+		}
 
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprintf(w, `<div class="alert alert-success">Ticket archived successfully</div>`)
+		err := kanban.ArchiveTicket(kanbanDir, project, slug, false)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"message": "archived"})
+	}
+}
+
+// ---- SSE + File Watcher ----
+
+func startFileWatcher(kanbanDir string) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Printf("Failed to create file watcher: %v", err)
+		return
+	}
+	defer watcher.Close()
+
+	go func() {
+		for event := range watcher.Events {
+			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Remove) != 0 &&
+				strings.HasSuffix(event.Name, ".md") {
+				log.Printf("File changed: %s", event.Name)
+				sseClientsMu.Lock()
+				alive := sseClients[:0]
+				for _, ch := range sseClients {
+					select {
+					case ch <- "refresh":
+						alive = append(alive, ch)
+					default:
+						close(ch)
+					}
+				}
+				sseClients = alive
+				sseClientsMu.Unlock()
+			}
+		}
+	}()
+
+	filepath.Walk(kanbanDir, func(path string, info os.FileInfo, err error) error {
+		if err == nil && info.IsDir() {
+			watcher.Add(path)
+		}
+		return nil
+	})
+
+	select {}
+}
+
+func handleSSE(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	ch := make(chan string, 10)
+	sseClientsMu.Lock()
+	sseClients = append(sseClients, ch)
+	sseClientsMu.Unlock()
+
+	defer func() {
+		sseClientsMu.Lock()
+		for i, c := range sseClients {
+			if c == ch {
+				sseClients = append(sseClients[:i], sseClients[i+1:]...)
+				close(ch)
+				break
+			}
+		}
+		sseClientsMu.Unlock()
+	}()
+
+	flusher.Flush()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case msg := <-ch:
+			w.Write([]byte("event: filechange\ndata: " + msg + "\n\n"))
+			flusher.Flush()
+		}
 	}
 }
 
@@ -359,44 +417,8 @@ func handleArchiveTicket(kanbanDir string) http.HandlerFunc {
 
 func getProjectList(kanbanDir string) []string {
 	projects, err := kanban.ListProjects(kanbanDir)
-	if err != nil { return []string{} }
+	if err != nil {
+		return []string{}
+	}
 	return projects
-}
-
-func escapeHTML(s string) template.HTML {
-	return template.HTML(template.HTMLEscapeString(s))
-}
-
-func priorityBadge(priority string) template.HTML {
-	if priority == "" { return "" }
-	class := "priority-" + strings.ToLower(priority)
-	name := strings.ToUpper(priority[:1]) + strings.ToLower(priority[1:])
-	return template.HTML(`<span class="badge badge-sm ` + class + `">` + name + `</span>`)
-}
-
-func tagBadges(tags []string) template.HTML {
-	if len(tags) == 0 { return "" }
-	var parts []string
-	for _, t := range tags {
-		parts = append(parts, `<span class="badge badge-sm tag-default">`+template.HTMLEscapeString(t)+`</span>`)
-	}
-	return template.HTML(strings.Join(parts, " "))
-}
-
-func formatFieldValue(field string, ticket *kanban.Ticket) string {
-	switch strings.ToLower(field) {
-	case "priority":
-		if ticket.Priority == "" { return "<em>none</em>" }
-		return string(escapeHTML(ticket.Priority))
-	case "assignee":
-		if ticket.Assignee == "" { return "<em>unassigned</em>" }
-		return string(escapeHTML(ticket.Assignee))
-	case "due":
-		if ticket.Due == "" { return "<em>none</em>" }
-		return string(escapeHTML(ticket.Due))
-	case "tags":
-		if len(ticket.Tags) == 0 { return "<em>none</em>" }
-		return string(escapeHTML(strings.Join(ticket.Tags, ", ")))
-	default: return ""
-	}
 }
