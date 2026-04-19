@@ -51,7 +51,7 @@ Description and notes go here.
 
 ## CLI
 
-All operations run through the `kanban-ui` binary. Build it once with `make build`,
+All operations run through the `kanban-ui` binary.
 then invoke the subcommands below. Commands respect `KANBAN_DIR` (default `./kanban`);
 the `--dir` flag overrides the env var. Add `--json` to any list/get command for
 machine-readable output.
@@ -90,11 +90,17 @@ machine-readable output.
 
 ./kanban-ui ticket create <project> <column> <title> \
     [--priority <p>] [--assignee <a>] [--due <yyyy-mm-dd>] \
-    [--tags "a,b,c"] [--body "..."]
+    [--tags "a,b,c"] [--body "..."] [--body-file PATH|-]
+
+# Update any combination of fields in ONE call. Only flags you pass are changed.
+# Prefer this over multiple `ticket set` invocations.
+./kanban-ui ticket edit <project> <slug> \
+    [--title <t>] [--priority <p>] [--assignee <a>] [--due <d>] \
+    [--tags "a,b,c"] [--body "..."] [--body-file PATH|-]
 
 ./kanban-ui ticket move <project> <slug> <target-column>
 
-./kanban-ui ticket set <project> <slug> <field> <value>
+./kanban-ui ticket set <project> <slug> <field> <value>     # single-field; prefer `ticket edit`
 
 ./kanban-ui ticket archive <project> <slug> [--delete]
 
@@ -141,9 +147,9 @@ and call `tickets list <project>` per project.
 
 ### Edit ticket body
 
-Use the `Edit` tool on the `.md` file directly — the CLI manages front matter
-fields and file location only. Find the path with
-`./kanban-ui ticket get <project> <slug> --json` (the `path` field).
+Use `ticket edit --body "..."` (or `--body-file PATH`, or `--body-file -` to
+pipe from stdin for long bodies). For in-place edits that preserve the rest of
+the file, find the path via `ticket get --json` and use the `Edit` tool.
 
 ---
 
