@@ -6,8 +6,10 @@ import { ToastList } from './components/ui/Toast'
 import { HomePage } from './pages/HomePage'
 import { BoardPage } from './pages/BoardPage'
 import { ProjectConfigPage } from './pages/ProjectConfigPage'
+import { TicketPage } from './pages/TicketPage'
 import { useModal } from './context/ModalContext'
 import { NewTicketForm } from './components/ticket/NewTicketForm'
+import { AuthTokenForm } from './components/auth/AuthTokenForm'
 import { useToast } from './context/ToastContext'
 import { api } from './api/kanban'
 import { ApiError } from './api/client'
@@ -51,13 +53,29 @@ export function App() {
   }, [refreshProjects])
 
   useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent).detail as string
-      showToast(`Authentication failed: ${detail || 'Invalid or expired token'}`, 'error')
+    let promptOpen = false
+    const handler = () => {
+      if (promptOpen) return
+      promptOpen = true
+      openModal('Authentication required', (
+        <AuthTokenForm
+          onSubmit={() => {
+            promptOpen = false
+            closeModal()
+            showToast('Token saved')
+            refreshProjects()
+            window.dispatchEvent(new CustomEvent('kanban:refresh'))
+          }}
+          onCancel={() => {
+            promptOpen = false
+            closeModal()
+          }}
+        />
+      ))
     }
     window.addEventListener('kanban:unauthorized', handler)
     return () => window.removeEventListener('kanban:unauthorized', handler)
-  }, [showToast])
+  }, [openModal, closeModal, showToast, refreshProjects])
 
   const handleNewTicket = useCallback(() => {
     if (!currentProject) return
@@ -105,6 +123,7 @@ export function App() {
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/project/:name" element={<BoardPage />} />
+          <Route path="/project/:name/ticket/:slug" element={<TicketPage />} />
           <Route path="/project/:name/config" element={<ProjectConfigPage />} />
         </Routes>
       </div>

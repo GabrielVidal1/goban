@@ -6,3 +6,4 @@ tmp/
 kanban-ui
 
 tsconfig.tsbuildinfo
+.mcp.json

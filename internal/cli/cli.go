@@ -15,52 +15,48 @@ import (
 
 var globalConfig *config.Config
 
-// Commands lists every top-level CLI subcommand. main.go checks this to decide
-// between CLI mode and server mode.
-var Commands = map[string]bool{
-	"projects": true,
-	"project":  true,
-	"columns":  true,
-	"tickets":  true,
-	"ticket":   true,
-	"config":   true,
-	"help":     true,
-	"-h":       true,
-	"--help":   true,
-}
-
-// Run dispatches the CLI. Returns the process exit code.
-func Run(args []string, cfg *config.Config) int {
-	globalConfig = cfg
+// Run is the unified entry point for the CLI. It parses global flags, loads
+// config, and dispatches to the appropriate command. Returns a process exit code.
+func Run(args []string) int {
 	if len(args) == 0 {
-		printUsage(os.Stderr)
-		return 2
+		args = []string{"serve"}
 	}
-	top := args[0]
-	rest := args[1:]
+
+	globalFlags, rest := ParseTopLevel(args)
+
+	// Build config from global flags + env + .env defaults.
+	globalConfig = config.Load(globalFlags.Dir, globalFlags.Host, globalFlags.Port)
+
+	if len(rest) == 0 {
+		rest = []string{"serve"}
+	}
+	top := rest[0]
+	cmdArgs := rest[1:]
 
 	switch top {
+	case "serve":
+		return cmdServe(cmdArgs)
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 		return 0
 	case "projects":
-		return dispatch(rest, map[string]cmdFunc{
+		return dispatch(cmdArgs, map[string]cmdFunc{
 			"list": cmdProjectsList,
 		})
 	case "project":
-		return dispatch(rest, map[string]cmdFunc{
+		return dispatch(cmdArgs, map[string]cmdFunc{
 			"info": cmdProjectInfo,
 		})
 	case "columns":
-		return dispatch(rest, map[string]cmdFunc{
+		return dispatch(cmdArgs, map[string]cmdFunc{
 			"list": cmdColumnsList,
 		})
 	case "tickets":
-		return dispatch(rest, map[string]cmdFunc{
+		return dispatch(cmdArgs, map[string]cmdFunc{
 			"list": cmdTicketsList,
 		})
 	case "ticket":
-		return dispatch(rest, map[string]cmdFunc{
+		return dispatch(cmdArgs, map[string]cmdFunc{
 			"get":     cmdTicketGet,
 			"create":  cmdTicketCreate,
 			"move":    cmdTicketMove,
@@ -69,7 +65,7 @@ func Run(args []string, cfg *config.Config) int {
 			"run":     cmdTicketRun,
 		})
 	case "config":
-		return dispatch(rest, map[string]cmdFunc{
+		return dispatch(cmdArgs, map[string]cmdFunc{
 			"get":       cmdConfigGet,
 			"set-order": cmdConfigSetOrder,
 		})
@@ -102,55 +98,6 @@ func joinKeys(m map[string]cmdFunc) string {
 	return strings.Join(keys, ", ")
 }
 
-// addCommonFlags registers --dir on fs. If asJSON is non-nil, also registers --json.
-func addCommonFlags(fs *flag.FlagSet, dir *string, asJSON *bool) {
-	defaultDir := ""
-	if globalConfig != nil {
-		defaultDir = globalConfig.KanbanDir
-	} else {
-		defaultDir = os.Getenv("KANBAN_DIR")
-	}
-	fs.StringVar(dir, "dir", defaultDir, "kanban data directory (overrides KANBAN_DIR)")
-	if asJSON != nil {
-		fs.BoolVar(asJSON, "json", false, "output as JSON")
-	}
-}
-
-// parseArgs lets flags appear before or after positional arguments. Go's flag
-// package stops at the first non-flag token, which would otherwise force flags
-// to precede all positionals.
-func parseArgs(fs *flag.FlagSet, args []string) error {
-	type boolFlag interface{ IsBoolFlag() bool }
-	var flags, positionals []string
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if a == "--" {
-			positionals = append(positionals, args[i+1:]...)
-			break
-		}
-		if len(a) > 1 && a[0] == '-' {
-			name := strings.TrimLeft(a, "-")
-			if strings.Contains(name, "=") {
-				flags = append(flags, a)
-				continue
-			}
-			flags = append(flags, a)
-			if f := fs.Lookup(name); f != nil {
-				if bv, ok := f.Value.(boolFlag); ok && bv.IsBoolFlag() {
-					continue
-				}
-			}
-			if i+1 < len(args) {
-				flags = append(flags, args[i+1])
-				i++
-			}
-			continue
-		}
-		positionals = append(positionals, a)
-	}
-	return fs.Parse(append(flags, positionals...))
-}
-
 func fail(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "error: "+format+"\n", args...)
 }
@@ -162,7 +109,7 @@ func cmdProjectsList(args []string) int {
 	var dir string
 	var asJSON bool
 	addCommonFlags(fs, &dir, &asJSON)
-	if err := parseArgs(fs, args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return 2
 	}
 
@@ -203,7 +150,7 @@ func cmdProjectInfo(args []string) int {
 	var dir string
 	var asJSON bool
 	addCommonFlags(fs, &dir, &asJSON)
-	if err := parseArgs(fs, args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return 2
 	}
 	if fs.NArg() < 1 {
@@ -229,7 +176,7 @@ func cmdColumnsList(args []string) int {
 	var dir string
 	var asJSON bool
 	addCommonFlags(fs, &dir, &asJSON)
-	if err := parseArgs(fs, args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return 2
 	}
 	if fs.NArg() < 1 {
@@ -262,7 +209,7 @@ func cmdTicketsList(args []string) int {
 	fs.StringVar(&assignee, "assignee", "", "filter by assignee")
 	fs.StringVar(&priority, "priority", "", "filter by priority")
 	fs.StringVar(&tag, "tag", "", "filter by tag")
-	if err := parseArgs(fs, args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return 2
 	}
 	if fs.NArg() < 1 {
@@ -291,7 +238,7 @@ func cmdTicketGet(args []string) int {
 	var dir string
 	var asJSON bool
 	addCommonFlags(fs, &dir, &asJSON)
-	if err := parseArgs(fs, args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return 2
 	}
 	if fs.NArg() < 2 {
@@ -331,7 +278,7 @@ func cmdTicketCreate(args []string) int {
 	fs.StringVar(&due, "due", "", "")
 	fs.StringVar(&tags, "tags", "", "comma-separated")
 	fs.StringVar(&body, "body", "", "ticket body")
-	if err := parseArgs(fs, args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return 2
 	}
 	if fs.NArg() < 3 {
@@ -358,7 +305,7 @@ func cmdTicketMove(args []string) int {
 	fs := flag.NewFlagSet("ticket move", flag.ContinueOnError)
 	var dir string
 	addCommonFlags(fs, &dir, nil)
-	if err := parseArgs(fs, args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return 2
 	}
 	if fs.NArg() < 3 {
@@ -378,7 +325,7 @@ func cmdTicketSet(args []string) int {
 	fs := flag.NewFlagSet("ticket set", flag.ContinueOnError)
 	var dir string
 	addCommonFlags(fs, &dir, nil)
-	if err := parseArgs(fs, args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return 2
 	}
 	if fs.NArg() < 4 {
@@ -400,7 +347,7 @@ func cmdTicketArchive(args []string) int {
 	var del bool
 	addCommonFlags(fs, &dir, nil)
 	fs.BoolVar(&del, "delete", false, "delete instead of archiving")
-	if err := parseArgs(fs, args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return 2
 	}
 	if fs.NArg() < 2 {
@@ -423,7 +370,7 @@ func cmdTicketRun(args []string) int {
 	fs := flag.NewFlagSet("ticket run", flag.ContinueOnError)
 	var dir string
 	addCommonFlags(fs, &dir, nil)
-	if err := parseArgs(fs, args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return 2
 	}
 	if fs.NArg() < 2 {
@@ -444,7 +391,7 @@ func cmdConfigGet(args []string) int {
 	var dir string
 	var asJSON bool
 	addCommonFlags(fs, &dir, &asJSON)
-	if err := parseArgs(fs, args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return 2
 	}
 	if fs.NArg() < 1 {
@@ -467,7 +414,7 @@ func cmdConfigSetOrder(args []string) int {
 	fs := flag.NewFlagSet("config set-order", flag.ContinueOnError)
 	var dir string
 	addCommonFlags(fs, &dir, nil)
-	if err := parseArgs(fs, args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return 2
 	}
 	if fs.NArg() < 2 {
@@ -507,9 +454,10 @@ func writeJSON(w io.Writer, v any) int {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprintln(w, `Usage: kanban-ui <command> [subcommand] [flags] [args]
+	fmt.Fprintln(w, `Usage: kanban-ui [global flags] <command> [subcommand] [flags] [args]
 
-Run with no arguments to start the web server. The commands below are CLI-only.
+Server
+  serve                                             Start the web UI server (default when no command given)
 
 Projects
   projects list                                     List all projects
@@ -529,7 +477,11 @@ Config
   config get <project>
   config set-order <project> <col1,col2,...>
 
-Common flags
-  --dir <path>   Kanban directory (overrides KANBAN_DIR env; default ./kanban)
-  --json         Emit JSON (list/get commands only)`)
+Global flags (apply to all commands)
+  --dir <path>    Kanban directory (overrides KANBAN_DIR; default ./kanban)
+  --host <host>   Listen host for serve (overrides HOST; default localhost)
+  --port <port>   Listen port for serve (overrides PORT; default 8080)
+
+Common flags (data commands)
+  --json          Emit JSON (list/get commands only)`)
 }

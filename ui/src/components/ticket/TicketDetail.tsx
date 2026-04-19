@@ -3,6 +3,7 @@ import type { Ticket } from '../../types/kanban'
 import { Badge, getPriorityVariant, getTagVariant } from '../ui/Badge'
 import { useModal } from '../../context/ModalContext'
 import { MoveTicketForm } from './MoveTicketForm'
+import { EditTicketForm } from './EditTicketForm'
 import { api } from '../../api/kanban'
 import { useToast } from '../../context/ToastContext'
 import { ApiError } from '../../api/client'
@@ -47,6 +48,19 @@ export function TicketDetail({ ticket, columns, onRefresh }: TicketDetailProps) 
           } catch (err) {
             showToast(err instanceof ApiError ? err.message : 'Failed to move ticket', 'error')
           }
+        }}
+        onCancel={() => openModal('Ticket', <TicketDetail ticket={ticket} columns={columns} onRefresh={onRefresh} />)}
+      />
+    ))
+  }
+
+  const handleEdit = () => {
+    openModal('Edit ticket', (
+      <EditTicketForm
+        ticket={ticket}
+        onSubmit={() => {
+          closeModal()
+          onRefresh()
         }}
         onCancel={() => openModal('Ticket', <TicketDetail ticket={ticket} columns={columns} onRefresh={onRefresh} />)}
       />
@@ -134,6 +148,12 @@ export function TicketDetail({ ticket, columns, onRefresh }: TicketDetailProps) 
             className="inline-flex items-center gap-[5px] h-[30px] px-[10px] rounded-sm text-[12.5px] font-medium cursor-pointer transition-all bg-bg-elev border border-border text-fg hover:bg-bg-hover hover:border-border-strong disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isRunning ? 'Running...' : 'Start'}
+          </button>
+          <button
+            onClick={handleEdit}
+            className="inline-flex items-center gap-[5px] h-[30px] px-[10px] rounded-sm text-[12.5px] font-medium cursor-pointer transition-all bg-bg-elev border border-border text-fg hover:bg-bg-hover hover:border-border-strong"
+          >
+            Edit
           </button>
           <button
             onClick={handleMove}

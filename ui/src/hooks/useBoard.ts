@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { api } from '../api/kanban'
+import { useToast } from '../context/ToastContext'
 import type { BoardData } from '../types/kanban'
 
 export function useBoard(projectName: string) {
+  const { showToast } = useToast()
   const [boardData, setBoardData] = useState<BoardData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -28,9 +30,10 @@ export function useBoard(projectName: string) {
     const es = new EventSource('/events')
     es.addEventListener('filechange', () => {
       fetchBoard()
+      showToast('Board updated')
     })
     return () => es.close()
-  }, [fetchBoard])
+  }, [fetchBoard, showToast])
 
   return { boardData, setBoardData, loading, error, refetch: fetchBoard }
 }

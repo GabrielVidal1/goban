@@ -8,13 +8,14 @@ import (
 
 type Config struct {
 	KanbanDir string
+	Host      string
 	Port      string
 	AuthToken string
 }
 
 // Load reads .env, then applies flag overrides, env vars, and defaults.
-// Pass empty strings for flagDir/flagPort when no CLI flags are available.
-func Load(flagDir, flagPort string) *Config {
+// Pass empty strings for flagDir/flagHost/flagPort when no CLI flags are available.
+func Load(flagDir, flagHost, flagPort string) *Config {
 	loadDotEnv(".env")
 
 	dir := flagDir
@@ -23,6 +24,14 @@ func Load(flagDir, flagPort string) *Config {
 	}
 	if dir == "" {
 		dir = "./kanban"
+	}
+
+	host := flagHost
+	if host == "" {
+		host = os.Getenv("HOST")
+	}
+	if host == "" {
+		host = "localhost"
 	}
 
 	port := flagPort
@@ -35,6 +44,7 @@ func Load(flagDir, flagPort string) *Config {
 
 	return &Config{
 		KanbanDir: dir,
+		Host:      host,
 		Port:      port,
 		AuthToken: os.Getenv("AUTH_TOKEN"),
 	}
