@@ -51,4 +51,5 @@ export interface UpdateFieldRequest {
 
 export interface ProjectConfig {
   columnsOrder: string[];
+  shortname?: string;
 }

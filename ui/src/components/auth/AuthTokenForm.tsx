@@ -2,11 +2,10 @@ import { useState, type FormEvent } from 'react'
 import { setAuthToken } from '../../api/client'
 
 interface AuthTokenFormProps {
-  onSubmit: () => void
   onCancel: () => void
 }
 
-export function AuthTokenForm({ onSubmit, onCancel }: AuthTokenFormProps) {
+export function AuthTokenForm({ onCancel }: AuthTokenFormProps) {
   const [token, setToken] = useState('')
 
   const handleSubmit = (e: FormEvent<HTMLFormElement>) => {
@@ -14,7 +13,7 @@ export function AuthTokenForm({ onSubmit, onCancel }: AuthTokenFormProps) {
     const trimmed = token.trim()
     if (!trimmed) return
     setAuthToken(trimmed)
-    onSubmit()
+    window.location.reload()
   }
 
   return (

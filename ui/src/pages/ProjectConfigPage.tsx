@@ -72,6 +72,7 @@ export function ProjectConfigPage() {
   const [config, setConfig] = useState<ProjectConfig>({ columnsOrder: [] })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [shortnameInput, setShortnameInput] = useState('')
 
   // For adding new column to order
   const [newColumnInput, setNewColumnInput] = useState('')
@@ -85,6 +86,7 @@ export function ProjectConfigPage() {
       ])
       setColumns(cols)
       setConfig(cfg)
+      setShortnameInput(cfg.shortname ?? '')
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to load config', 'error')
     } finally {
@@ -103,7 +105,7 @@ export function ProjectConfigPage() {
     if (!name) return
     setSaving(true)
     try {
-      await api.updateProjectConfig(name, config)
+      await api.updateProjectConfig(name, { ...config, shortname: shortnameInput.toUpperCase() || undefined })
       showToast('Configuration saved')
       window.dispatchEvent(new CustomEvent('kanban:refresh'))
     } catch (err) {
@@ -155,6 +157,21 @@ export function ProjectConfigPage() {
         </Link>
         <h2 className="text-[17px] font-semibold tracking-[-0.02em] text-fg">Project Config</h2>
       </div>
+
+      <section className="mb-8">
+        <h3 className="text-[14px] font-semibold text-fg mb-1.5">Project Shortname</h3>
+        <p className="text-[12.5px] text-fg-muted mb-3">
+          2–6 uppercase alphanumeric characters (e.g. <code className="font-mono">KBN</code>). When set, new tickets will be named <code className="font-mono">KBN-1</code>, <code className="font-mono">KBN-2</code>, etc.
+        </p>
+        <input
+          type="text"
+          value={shortnameInput}
+          onChange={(e) => setShortnameInput(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6))}
+          placeholder="e.g. KBN"
+          maxLength={6}
+          className="w-32 px-3 py-2 bg-bg-elev border border-border rounded-sm text-[13px] font-mono text-fg placeholder:text-fg-dim focus:outline-none focus:border-accent transition-colors"
+        />
+      </section>
 
       <section className="mb-8">
         <h3 className="text-[14px] font-semibold text-fg mb-1.5">Column Order</h3>

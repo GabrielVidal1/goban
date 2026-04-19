@@ -40,6 +40,10 @@ func cmdServe(_ []string) int {
 	go server.StartFileWatcher(cfg.KanbanDir)
 	mux.HandleFunc("/events", server.HandleSSE)
 
+	// Health and readiness probes (no auth required).
+	mux.HandleFunc("GET /health", server.HealthHandler)
+	mux.HandleFunc("GET /ready", server.ReadyHandler)
+
 	if UIFiles != nil {
 		mux.HandleFunc("/", server.SPAHandler(UIFiles))
 	}

@@ -11,6 +11,7 @@ import { useModal } from './context/ModalContext'
 import { NewTicketForm } from './components/ticket/NewTicketForm'
 import { AuthTokenForm } from './components/auth/AuthTokenForm'
 import { useToast } from './context/ToastContext'
+import { useEventStream } from './hooks/useEventStream'
 import { api } from './api/kanban'
 import { ApiError } from './api/client'
 import type { Project } from './types/kanban'
@@ -40,6 +41,7 @@ export function App() {
   const { theme, toggle } = useTheme()
   const { openModal, closeModal } = useModal()
   const { showToast } = useToast()
+  useEventStream()
   const [projects, setProjects] = useState<Project[]>([])
   const location = useLocation()
   const currentProject = extractCurrentProject(location.pathname)
@@ -59,13 +61,6 @@ export function App() {
       promptOpen = true
       openModal('Authentication required', (
         <AuthTokenForm
-          onSubmit={() => {
-            promptOpen = false
-            closeModal()
-            showToast('Token saved')
-            refreshProjects()
-            window.dispatchEvent(new CustomEvent('kanban:refresh'))
-          }}
           onCancel={() => {
             promptOpen = false
             closeModal()

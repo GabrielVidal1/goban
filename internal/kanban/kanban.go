@@ -28,6 +28,7 @@ type Ticket struct {
 
 type ProjectConfig struct {
 	ColumnsOrder []string `json:"columnsOrder"`
+	Shortname    string   `json:"shortname,omitempty"`
 }
 
 const configFileName = "config.json"
@@ -352,6 +353,49 @@ func ParseTicket(path string) (Ticket, error) {
 	return ticket, nil
 }
 
+// nextTicketIndex scans all column directories under projDir and returns the
+// next available index for the given shortname (max existing index + 1, or 1).
+func nextTicketIndex(projDir, shortname string) int {
+	prefix := strings.ToUpper(shortname) + "-"
+	re := regexp.MustCompile(`^` + regexp.QuoteMeta(prefix) + `(\d+)-`)
+	max := 0
+	_ = filepath.Walk(projDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(info.Name(), ".md") {
+			return nil
+		}
+		if m := re.FindStringSubmatch(info.Name()); m != nil {
+			var n int
+			fmt.Sscanf(m[1], "%d", &n)
+			if n > max {
+				max = n
+			}
+		}
+		return nil
+	})
+	return max + 1
+}
+
+// ValidateShortname returns an error if s is not a valid project shortname.
+func ValidateShortname(s string) error {
+	if matched, _ := regexp.MatchString(`^[A-Z0-9]{2,6}$`, s); !matched {
+		return fmt.Errorf("shortname must be 2–6 uppercase alphanumeric characters (got %q)", s)
+	}
+	return nil
+}
+
+// SetProjectShortname validates and persists a shortname in the project config.
+func SetProjectShortname(kanbanDir, project, shortname string) error {
+	if err := ValidateShortname(shortname); err != nil {
+		return err
+	}
+	cfg, err := LoadProjectConfig(kanbanDir, project)
+	if err != nil {
+		return err
+	}
+	cfg.Shortname = shortname
+	return SaveProjectConfig(kanbanDir, project, cfg)
+}
+
 func CreateTicket(kanbanDir, projectName, column, title string, opts map[string]string) (*Ticket, error) {
 	if kanbanDir == "" {
 		kanbanDir = defaultKanbanDir
@@ -362,11 +406,18 @@ func CreateTicket(kanbanDir, projectName, column, title string, opts map[string]
 		return nil, fmt.Errorf("failed to create directory %s: %w", colDir, err)
 	}
 
-	slug := strings.ToLower(title)
-	slug = regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(slug, "-")
-	slug = strings.Trim(slug, "-")
+	cfg, _ := LoadProjectConfig(kanbanDir, projectName)
 	timestamp := time.Now().Unix()
-	filename := fmt.Sprintf("%s-%d.md", slug, timestamp)
+	var filename string
+	if cfg.Shortname != "" {
+		idx := nextTicketIndex(projDir, cfg.Shortname)
+		filename = fmt.Sprintf("%s-%d-%d.md", strings.ToUpper(cfg.Shortname), idx, timestamp)
+	} else {
+		slug := strings.ToLower(title)
+		slug = regexp.MustCompile(`[^a-z0-9]+`).ReplaceAllString(slug, "-")
+		slug = strings.Trim(slug, "-")
+		filename = fmt.Sprintf("%s-%d.md", slug, timestamp)
+	}
 	path := filepath.Join(colDir, filename)
 
 	var fmLines []string
@@ -522,6 +573,49 @@ func UpdateTicketField(kanbanDir, projectName, slug, field, value string) (*Tick
 
 	if err := os.WriteFile(ticketPath, []byte(newContent), 0644); err != nil {
 		return nil, fmt.Errorf("failed to update ticket: %w", err)
+	}
+	ticket, _ := ParseTicket(ticketPath)
+	return &ticket, nil
+}
+
+func UpdateTicketBody(kanbanDir, projectName, slug, body string) (*Ticket, error) {
+	if kanbanDir == "" {
+		kanbanDir = defaultKanbanDir
+	}
+	projDir := filepath.Join(kanbanDir, projectName)
+	var ticketPath string
+	_ = filepath.Walk(projDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(info.Name(), ".md") {
+			return nil
+		}
+		if strings.Contains(strings.ToLower(info.Name()), strings.ToLower(slug)) {
+			ticketPath = path
+			return filepath.SkipAll
+		}
+		return nil
+	})
+	if ticketPath == "" {
+		return nil, fmt.Errorf("ticket '%s' not found in %s", slug, projDir)
+	}
+	data, err := os.ReadFile(ticketPath)
+	if err != nil {
+		return nil, err
+	}
+	content := strings.TrimSpace(string(data))
+	var newContent string
+	if strings.HasPrefix(content, "---") {
+		endIdx := strings.Index(content[3:], "\n---")
+		if endIdx > 0 {
+			header := content[:6+endIdx]
+			newContent = header + "\n" + strings.TrimLeft(body, "\n") + "\n"
+		} else {
+			newContent = content + "\n---\n" + body + "\n"
+		}
+	} else {
+		newContent = fmt.Sprintf("---\ntitle: %s\ncreated: %s\n---\n%s\n", extractTitle(content), time.Now().Format("2006-01-02"), body)
+	}
+	if err := os.WriteFile(ticketPath, []byte(newContent), 0644); err != nil {
+		return nil, fmt.Errorf("failed to update ticket body: %w", err)
 	}
 	ticket, _ := ParseTicket(ticketPath)
 	return &ticket, nil

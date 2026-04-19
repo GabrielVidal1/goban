@@ -120,6 +120,12 @@ func HandleAPIUpdateProjectConfig(kanbanDir string) http.HandlerFunc {
 				return
 			}
 		}
+		if cfg.Shortname != "" {
+			if err := kanban.ValidateShortname(cfg.Shortname); err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
 		if err := kanban.SaveProjectConfig(kanbanDir, project, cfg); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return

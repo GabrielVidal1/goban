@@ -40,7 +40,9 @@ export function TicketCard({ ticket, onClick }: TicketCardProps) {
     >
       <div className="flex items-center justify-between gap-1.5 mb-[3px]">
         <span className="font-mono text-[10.5px] text-fg-faint font-medium tracking-[0.02em]">
-          {ticket.slug.split('-').slice(-1)[0]}
+          {/^[A-Z0-9]+-\d+-\d+$/.test(ticket.slug)
+            ? ticket.slug.split('-').slice(0, 2).join('-')
+            : ticket.slug.split('-').slice(-1)[0]}
         </span>
         <div className="flex items-center gap-1.5">
           {ticket.priority && (
