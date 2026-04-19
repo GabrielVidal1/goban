@@ -32,6 +32,9 @@ dev-go:
 dev-ui:
 	cd $(UI_DIR) && npm run dev
 
+docker-build:
+	docker build -t kanban-ui .
+
 clean:
 	rm -f $(BINARY)
 	rm -rf $(UI_DIR)/dist tmp

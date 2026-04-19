@@ -1,0 +1,10 @@
+services:
+  kanban:
+    image: ghcr.io/your-username/kanban-ui:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./kanban:/kanban
+    environment:
+      - KANBAN_DIR=/kanban
+      - AUTH_TOKEN=changeme
