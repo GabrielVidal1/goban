@@ -13,20 +13,45 @@ type GlobalFlags struct {
 	Port string
 }
 
-// ParseTopLevel separates global flags from the remaining args (command + its
-// own flags/args). Global flags may appear anywhere before "--".
+// ParseTopLevel separates global flags (--dir/--host/--port) from the remaining
+// args (command + its own flags/args). Only the known global flags are consumed;
+// everything else — positionals AND unrecognized flags such as a subcommand's
+// --priority/--tags/--json — is passed through verbatim so the subcommand can
+// parse it. Global flags may appear anywhere, before or after the command.
 func ParseTopLevel(args []string) (GlobalFlags, []string) {
-	fs := flag.NewFlagSet("kanban-ui", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
+	g := GlobalFlags{
+		Dir:  os.Getenv("KANBAN_DIR"),
+		Host: os.Getenv("HOST"),
+		Port: os.Getenv("PORT"),
+	}
+	known := map[string]*string{"dir": &g.Dir, "host": &g.Host, "port": &g.Port}
 
-	var g GlobalFlags
-	fs.StringVar(&g.Dir, "dir", os.Getenv("KANBAN_DIR"), "kanban directory (overrides KANBAN_DIR)")
-	fs.StringVar(&g.Host, "host", os.Getenv("HOST"), "listen host (overrides HOST)")
-	fs.StringVar(&g.Port, "port", os.Getenv("PORT"), "listen port (overrides PORT)")
-
-	// Use the mixed-position parser so flags can precede or follow the command.
-	_ = parseFlags(fs, args)
-	return g, fs.Args()
+	var rest []string
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			rest = append(rest, args[i:]...)
+			break
+		}
+		if len(a) > 1 && a[0] == '-' {
+			name := strings.TrimLeft(a, "-")
+			val, inline := "", false
+			if eq := strings.IndexByte(name, '='); eq >= 0 {
+				val, name, inline = name[eq+1:], name[:eq], true
+			}
+			if ptr, ok := known[name]; ok {
+				if inline {
+					*ptr = val
+				} else if i+1 < len(args) {
+					*ptr = args[i+1]
+					i++
+				}
+				continue
+			}
+		}
+		rest = append(rest, a)
+	}
+	return g, rest
 }
 
 // addCommonFlags registers --dir (defaulting to the global config) and
