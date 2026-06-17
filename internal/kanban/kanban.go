@@ -291,6 +291,25 @@ func GetTicket(kanbanDir, projectName, slug string) (*Ticket, error) {
 	return matched, err
 }
 
+// splitFrontMatter separates a ticket file's YAML-ish front matter from its
+// body. It returns the lines between the opening and closing "---" fences
+// (exclusive), the body text (with the blank separator after the closing fence
+// stripped), and whether a complete front-matter block was found. Line-based so
+// it can't slice through a fence the way hand-tuned byte offsets did.
+func splitFrontMatter(content string) (fmLines []string, body string, ok bool) {
+	content = strings.TrimSpace(content)
+	if !strings.HasPrefix(content, "---") {
+		return nil, content, false
+	}
+	lines := strings.Split(content, "\n")
+	for i := 1; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "---" {
+			return lines[1:i], strings.TrimLeft(strings.Join(lines[i+1:], "\n"), "\n"), true
+		}
+	}
+	return nil, content, false
+}
+
 func ParseTicket(path string) (Ticket, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -302,16 +321,9 @@ func ParseTicket(path string) (Ticket, error) {
 	filename := filepath.Base(path)
 	ticket.Slug = strings.TrimSuffix(filename, ".md")
 
-	if strings.HasPrefix(content, "---") {
-		endIdx := strings.Index(content[3:], "\n---")
-		fmContent := ""
-		body := content
-		if endIdx > 0 {
-			fmContent = content[4 : 3+endIdx]
-			body = strings.TrimSpace(content[6+endIdx:])
-		}
+	if fmLines, body, ok := splitFrontMatter(content); ok {
 		ticket.Body = body
-		for _, line := range strings.Split(fmContent, "\n") {
+		for _, line := range fmLines {
 			line = strings.TrimSpace(line)
 			if line == "" {
 				continue
@@ -521,54 +533,32 @@ func UpdateTicketField(kanbanDir, projectName, slug, field, value string) (*Tick
 	content := strings.TrimSpace(string(data))
 	fieldLower := strings.ToLower(field)
 
-	var newContent string
-	if strings.HasPrefix(content, "---") {
-		endIdx := strings.Index(content[3:], "\n---")
-		if endIdx > 0 {
-			fmContent := content[4 : 3+endIdx]
-			body := content[6+endIdx:]
-			var newFM []string
-			fieldUpdated := false
-			for _, line := range strings.Split(fmContent, "\n") {
-				line = strings.TrimSpace(line)
-				if line == "" {
-					newFM = append(newFM, line)
-					continue
-				}
-				colonIdx := strings.Index(line, ":")
-				if colonIdx < 0 {
-					newFM = append(newFM, line)
-					continue
-				}
-				key := strings.ToLower(strings.TrimSpace(line[:colonIdx]))
-				if key == fieldLower {
-					newFM = append(newFM, field+": "+value)
-					fieldUpdated = true
-				} else {
-					newFM = append(newFM, line)
-				}
-			}
-			if !fieldUpdated {
-				var inserted []string
-				inserted = append(inserted, "title: placeholder")
-				for _, line := range newFM {
-					inserted = append(inserted, line)
-					if strings.HasPrefix(line, "title:") && !fieldUpdated {
-						inserted = append(inserted, field+": "+value)
-						fieldUpdated = true
-					}
-				}
-				newFM = inserted
-			}
-			fmStr := strings.Join(newFM, "\n")
-			newContent = "---\n" + fmStr + "\n---\n" + body
-		} else {
-			title := extractTitle(content)
-			newContent = fmt.Sprintf("---\ntitle: %s\n%s: %s\ncreated: %s\n---\n%s", title, field, value, time.Now().Format("2006-01-02"), content)
+	fmLines, body, ok := splitFrontMatter(content)
+	if !ok {
+		// No front matter — synthesize one and keep existing content as body.
+		fmLines = []string{"title: " + extractTitle(content), "created: " + time.Now().Format("2006-01-02")}
+		body = content
+	}
+
+	fieldUpdated := false
+	for i, line := range fmLines {
+		colonIdx := strings.Index(line, ":")
+		if colonIdx < 0 {
+			continue
 		}
-	} else {
-		title := extractTitle(content)
-		newContent = fmt.Sprintf("---\ntitle: %s\n%s: %s\ncreated: %s\n---\n%s", title, field, value, time.Now().Format("2006-01-02"), content)
+		if strings.ToLower(strings.TrimSpace(line[:colonIdx])) == fieldLower {
+			fmLines[i] = field + ": " + value
+			fieldUpdated = true
+		}
+	}
+	if !fieldUpdated {
+		// Field not present yet — append it rather than fabricating a title.
+		fmLines = append(fmLines, field+": "+value)
+	}
+
+	newContent := "---\n" + strings.Join(fmLines, "\n") + "\n---\n"
+	if body != "" {
+		newContent += body + "\n"
 	}
 
 	if err := os.WriteFile(ticketPath, []byte(newContent), 0644); err != nil {
@@ -603,14 +593,8 @@ func UpdateTicketBody(kanbanDir, projectName, slug, body string) (*Ticket, error
 	}
 	content := strings.TrimSpace(string(data))
 	var newContent string
-	if strings.HasPrefix(content, "---") {
-		endIdx := strings.Index(content[3:], "\n---")
-		if endIdx > 0 {
-			header := content[:6+endIdx]
-			newContent = header + "\n" + strings.TrimLeft(body, "\n") + "\n"
-		} else {
-			newContent = content + "\n---\n" + body + "\n"
-		}
+	if fmLines, _, ok := splitFrontMatter(content); ok {
+		newContent = "---\n" + strings.Join(fmLines, "\n") + "\n---\n" + strings.TrimLeft(body, "\n") + "\n"
 	} else {
 		newContent = fmt.Sprintf("---\ntitle: %s\ncreated: %s\n---\n%s\n", extractTitle(content), time.Now().Format("2006-01-02"), body)
 	}

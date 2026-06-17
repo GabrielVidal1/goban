@@ -1,6 +1,6 @@
 .claude
 .env
-kanban/
+/kanban/
 tmp/
 
 kanban-ui
