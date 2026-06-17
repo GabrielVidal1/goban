@@ -6,7 +6,6 @@ import { ToastList } from './components/ui/Toast'
 import { HomePage } from './pages/HomePage'
 import { BoardPage } from './pages/BoardPage'
 import { ProjectConfigPage } from './pages/ProjectConfigPage'
-import { TicketPage } from './pages/TicketPage'
 import { useModal } from './context/ModalContext'
 import { NewTicketForm } from './components/ticket/NewTicketForm'
 import { AuthTokenForm } from './components/auth/AuthTokenForm'
@@ -118,7 +117,7 @@ export function App() {
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/project/:name" element={<BoardPage />} />
-          <Route path="/project/:name/ticket/:slug" element={<TicketPage />} />
+          <Route path="/project/:name/ticket/:slug" element={<BoardPage />} />
           <Route path="/project/:name/config" element={<ProjectConfigPage />} />
         </Routes>
       </div>

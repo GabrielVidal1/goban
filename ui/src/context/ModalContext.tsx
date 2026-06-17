@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, type ReactNode } from 'react'
+import { createContext, useContext, useState, useCallback, useRef, type ReactNode } from 'react'
 
 interface ModalState {
   isOpen: boolean
@@ -8,7 +8,14 @@ interface ModalState {
 
 interface ModalContextValue {
   modal: ModalState
-  openModal: (title: string, content: ReactNode) => void
+  /**
+   * Open the modal. An optional `onClose` runs once when the modal is next
+   * closed (Escape / backdrop / X / programmatic `closeModal`) — used to keep
+   * deep-link URLs in sync. The callback persists across content swaps within
+   * the same session (e.g. opening Edit from the ticket modal) until the modal
+   * actually closes; pass `onClose` again only to replace it.
+   */
+  openModal: (title: string, content: ReactNode, onClose?: () => void) => void
   closeModal: () => void
 }
 
@@ -20,13 +27,18 @@ export function ModalProvider({ children }: { children: ReactNode }) {
     title: '',
     content: null,
   })
+  const onCloseRef = useRef<(() => void) | undefined>(undefined)
 
-  const openModal = useCallback((title: string, content: ReactNode) => {
+  const openModal = useCallback((title: string, content: ReactNode, onClose?: () => void) => {
+    if (onClose !== undefined) onCloseRef.current = onClose
     setModal({ isOpen: true, title, content })
   }, [])
 
   const closeModal = useCallback(() => {
+    const onClose = onCloseRef.current
+    onCloseRef.current = undefined
     setModal(prev => ({ ...prev, isOpen: false }))
+    onClose?.()
   }, [])
 
   return (
